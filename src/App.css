@@ -1,5 +1,11 @@
 @import 'bootstrap/dist/css/bootstrap.min.css';
 
+.fetchHack {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
 .form {
   padding: 1em;
 }

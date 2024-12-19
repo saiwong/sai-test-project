@@ -22,6 +22,7 @@ function App() {
   const [songQuery, setSongQuery] = useState('');
   const [singers, setSingers] = useState([]);
   const [page, setPage] = useState(0);
+  const [fetchUrl, setFetchUrl] = useState('');
 
   const pageSize = 25;
   const totalPages = Math.ceil(songs.length / pageSize);
@@ -70,12 +71,14 @@ function App() {
     const query = stringify({
       cmd: cmd,
       cmdValue: songId,
+      jsonpCallback: 'jQuery111107815842212372168_1727462477689',
       _: Date.now(),
     });
 
-    fetch(`${songserver}?${query}`, { jsonpCallback: 'jsonpCallback' })
-      .then(async (res) => console.log('command success', await res.json()))
-      .catch(err => console.error('command error', err));
+    // fetch(`${songserver}?${query}`, { jsonpCallback: 'jsonpCallback' })
+    //   .then(async (res) => console.log('command success', await res.json()))
+    //   .catch(err => console.error('command error', err));
+    setFetchUrl(`${songserver}?${query}`);
   }
 
   const debouncedSingerQuery = useDebouncedCallback(searchSingerQuery, 1000);
@@ -170,6 +173,7 @@ function App() {
           Tab content for Playlist
         </Tab>
       </Tabs>
+      <img src={fetchUrl} />
     </div>
   );
 }
