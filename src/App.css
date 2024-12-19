@@ -1,3 +1,22 @@
 @import 'bootstrap/dist/css/bootstrap.min.css';
 
+.form {
+  padding: 1em;
+}
 
+.link {
+  text-decoration: underline;
+  cursor: pointer;
+  color: blue;
+  padding: 0em 1em 1em 0em;
+  display: inline-block;
+}
+
+.accordion-body {
+  padding: 0em;
+}
+
+.action {
+  padding: 0.5em;
+  color: blue;
+}

@@ -5,12 +5,16 @@ import { titleCase } from "title-case";
 import Form from 'react-bootstrap/Form';
 import Accordion from 'react-bootstrap/Accordion';
 import Pagination from 'react-bootstrap/Pagination';
+import Table from 'react-bootstrap/Table';
+import Tab from 'react-bootstrap/Tab';
+import Tabs from 'react-bootstrap/Tabs';
 import { Converter } from 'opencc-js';
 import { searchTitle, searchSinger } from './songs';
 import React, { useState } from 'react';
 import { useDebouncedCallback } from 'use-debounce';
 
-const converter = Converter({ from: 'hk', to: 'cn' });
+const converterTrad2Simp = Converter({ from: 'hk', to: 'cn' });
+const converterSimp2Trad = Converter({ from: 'cn', to: 'hk' });
 
 function App() {
   const [songs, setSongs] = useState([]);
@@ -28,7 +32,7 @@ function App() {
       selectSinger('');
       return;
     };
-    const singersResults = new Set(searchSinger(converter(inputQuery))
+    const singersResults = new Set(searchSinger(converterTrad2Simp(inputQuery))
       .map(({ item: { singer }}) => titleCase(singer.toLowerCase())));
 
     setSingers([...singersResults]);
@@ -38,14 +42,14 @@ function App() {
     let query;
 
     if (!singer) {
-      query = { title: converter(inputQuery) };
+      query = { title: converterTrad2Simp(inputQuery) };
     } else if (!inputQuery) {
-      query = { singer: converter(singer) };
+      query = { singer: converterTrad2Simp(singer) };
     } else {
       query = {
         $and: [
-          { singer: converter(singer) },
-          { title: converter(inputQuery) },
+          { singer: converterTrad2Simp(singer) },
+          { title: converterTrad2Simp(inputQuery) },
         ]
       };
     };
@@ -60,11 +64,11 @@ function App() {
     searchSongQuery(songQuery, singer);
   }
 
-  async function queueSong(songId) {
+  async function queueSong(songId, cmd = 'Add1') {
     // http://192.168.2.26:8084/demo/CommandServlet?jsonpCallback=jQuery111107815842212372168_1727462477689&cmd=Add1&cmdValue=00016959&_=1727462477843
     const songserver = 'http://192.168.2.26:8084/demo/CommandServlet'
     const query = stringify({
-      cmd: 'Add1',
+      cmd: cmd,
       cmdValue: songId,
       _: Date.now(),
     });
@@ -96,51 +100,76 @@ function App() {
 
   return (
     <div className="App">
-      <Form>
-        <Form.Group className="mb-3" controlId="formSinger">
-          <Form.Label>Singer</Form.Label>
-          <Form.Control 
-            type="search"
-            placeholder="Enter name of Singer"
-            onChange={({ target }) => debouncedSingerQuery(target.value)}
-          />
-        </Form.Group>
+      <Tabs
+        defaultActiveKey="search">
+        <Tab eventKey="search" title="Search">
+          <Form className="form">
+            <Form.Group className="mb-3" controlId="formSinger">
+              <Form.Label>Singer</Form.Label>
+              <Form.Control 
+                type="search"
+                placeholder="Enter name of Singer"
+                onChange={({ target }) => debouncedSingerQuery(target.value)}
+              />
+            </Form.Group>
 
-        <Form.Group className="mb-3" controlId="formSong">
-          <Form.Label>Song</Form.Label>
-          <Form.Control
-            type="search"
-            placeholder="Enter name of Song"
-            onChange={({ target }) => debouncedSongQuery(target.value)}
-          />
-        </Form.Group>
-      </Form>    
+            <Form.Group className="mb-3" controlId="formSong">
+              <Form.Label>Song</Form.Label>
+              <Form.Control
+                type="search"
+                placeholder="Enter name of Song"
+                onChange={({ target }) => debouncedSongQuery(target.value)}
+              />
+            </Form.Group>
+          </Form>    
 
-      <Accordion alwaysOpen="true">
-        <Accordion.Item>
-          <Accordion.Header>Matching Singers</Accordion.Header>
-          <Accordion.Body>
-            {singers.map(singer =>
-              <span><a href="/#" onClick={() => selectSinger(singer)}>{singer}</a>&nbsp;&nbsp;</span>
-            )}
-          </Accordion.Body>
-        </Accordion.Item>
-        <Accordion.Item>
-          <Accordion.Header>Matching Songs {singerQuery ? `for ${singerQuery}` : ''}</Accordion.Header>
-          <Accordion.Body>
-            {songPagination()}
+          <Accordion alwaysOpen="true">
+            <Accordion.Item>
+              <Accordion.Header>Matching Singers</Accordion.Header>
+              <Accordion.Body>
+                {singers.map(singer =>
+                  <span className="singer link" onClick={() => selectSinger(singer)}>{converterSimp2Trad(singer)}</span>
+                )}
+              </Accordion.Body>
+            </Accordion.Item>
+            <Accordion.Item>
+              <Accordion.Header>Matching Songs {singerQuery ? `for ${singerQuery}` : ''}</Accordion.Header>
+              <Accordion.Body>
+                {songPagination()}
 
-            {songs.slice(page * pageSize, page * pageSize + pageSize).map(({ item: { id, title, singer } }) =>
-              <div class="row align-items-start">
-                <div class="col"><a href="/#" onClick={() => queueSong(id)}>{title}</a></div>
-                <div class="col"><a href="/#" onClick={() => selectSinger(singer)}>{singer}</a></div>
-              </div>
-            )}
+                {!totalPages ? '' : 
+                  <Table striped bordered hover>
+                    <thead>
+                      <tr>
+                        <th>Song Title</th>
+                        <th>Singer</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
 
-            {songPagination()}
-          </Accordion.Body>
-        </Accordion.Item>
-      </Accordion>
+                    {songs.slice(page * pageSize, page * pageSize + pageSize).map(({ item: { id, title, singer } }) =>
+                      <tr>
+                        <td><span className="song link" onClick={() => queueSong(id)}>{converterSimp2Trad(title)}</span></td>
+                        <td><span className="singer link" onClick={() => selectSinger(singer)}>{converterSimp2Trad(singer)}</span></td>
+                        <td>
+                          <span className="action next" onClick={() => queueSong(id, 'Pro1')}>⇪</span>
+                        </td>
+                      </tr>
+                    )}
+                    </tbody>
+                  </Table>
+                }
+                {songPagination()}
+              </Accordion.Body>
+            </Accordion.Item>
+          </Accordion>
+
+        </Tab>
+        <Tab eventKey="playlist" title="Playlist">
+          Tab content for Playlist
+        </Tab>
+      </Tabs>
     </div>
   );
 }
