@@ -1,0 +1,3 @@
+# ignore ALL build and dev folders
+node_modules/
+build/
