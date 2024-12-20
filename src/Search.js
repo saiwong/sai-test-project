@@ -5,6 +5,8 @@ import Form from 'react-bootstrap/Form';
 import Accordion from 'react-bootstrap/Accordion';
 import Pagination from 'react-bootstrap/Pagination';
 import Table from 'react-bootstrap/Table';
+import Toast from 'react-bootstrap/Toast';
+import ToastContainer from 'react-bootstrap/ToastContainer';
 import { Converter } from 'opencc-js';
 import { searchTitle, searchSinger } from './songs';
 import React, { useState } from 'react';
@@ -20,6 +22,8 @@ function Search({ songServerHost }) {
   const [singers, setSingers] = useState([]);
   const [page, setPage] = useState(0);
   const [activeTabs, setActiveTabs] = useState(['singers', 'songs']);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
 
   const pageSize = 25;
   const totalPages = Math.ceil(songs.length / pageSize);
@@ -73,18 +77,30 @@ function Search({ songServerHost }) {
     window.scrollTo(0, 0);
   }
 
-  async function queueSong(songId, cmd = 'Add1') {
+  async function queueSong(song, cmd = 'Add1') {
     // http://192.168.2.26:8084/demo/CommandServlet?jsonpCallback=jQuery111107815842212372168_1727462477689&cmd=Add1&cmdValue=00016959&_=1727462477843
     const songserver = `${songServerHost}/demo/CommandServlet`;
     const query = stringify({
       cmd: cmd,
-      cmdValue: songId,
+      cmdValue: song.id,
       _: Date.now(),
     });
 
     fetch(`${songserver}?${query}`, { jsonpCallback: 'jsonpCallback' })
-      .then(async (res) => console.log('command success', await res.json()))
-      .catch(err => console.error('command error', err));
+      .then(async (res) => {
+        console.log('command success', await res.json());
+        if (cmd == 'Add1') {
+          setToastMessage(`✅ Song queued - ${song.title}`);
+        } else {
+          setToastMessage(`🎤 Playing next - ${song.title}`);
+        }
+        setShowToast(true);
+      })
+      .catch(err => {
+        console.error('command error', err);
+        setToastMessage(`⚠️ Error adding song, please try again - ${song.title}`);
+        setShowToast(true);
+      });
   }
 
   const debouncedSingerQuery = useDebouncedCallback(searchSingerQuery, 1000);
@@ -157,12 +173,12 @@ function Search({ songServerHost }) {
                 </thead>
                 <tbody>
 
-                {songs.slice(page * pageSize, page * pageSize + pageSize).map(({ item: { id, title, singer } }) =>
+                {songs.slice(page * pageSize, page * pageSize + pageSize).map(({ item: song }) =>
                   <tr>
-                    <td><span className="song link" onClick={() => queueSong(id)}>{converterSimp2Trad(title)}</span></td>
-                    <td><span className="singer link" onClick={() => selectSinger(singer)}>{converterSimp2Trad(singer)}</span></td>
+                    <td><span className="song link" onClick={() => queueSong(song)}>{converterSimp2Trad(song.title)}</span></td>
+                    <td><span className="singer link" onClick={() => selectSinger(song.singer)}>{converterSimp2Trad(song.singer)}</span></td>
                     <td>
-                      <span className="action next" onClick={() => queueSong(id, 'Pro1')}>⬆️</span>
+                      <span className="action next" onClick={() => queueSong(song, 'Pro1')}>⬆️</span>
                     </td>
                   </tr>
                 )}
@@ -173,6 +189,11 @@ function Search({ songServerHost }) {
           </Accordion.Body>
         </Accordion.Item>
       </Accordion>
+      <ToastContainer position="bottom-start" containerPosition="fixed">
+        <Toast onClose={() => setShowToast(false)} show={showToast} autohide>
+          <Toast.Body>{toastMessage}</Toast.Body>
+        </Toast>
+      </ToastContainer>
     </div>
   );
 }

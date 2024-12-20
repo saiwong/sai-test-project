@@ -146,10 +146,10 @@ function Playlist({ songServerHost, selected }) {
           <Nav.Link onClick={() => restartSong()}>🔄 Restart</Nav.Link>
         </Nav.Item>
         <Nav.Item>
-          <Nav.Link onClick={() => skipSong()}>⏭️ Skip</Nav.Link>
+          <Nav.Link onClick={() => pauseSong()}>⏯️ Pause/Play</Nav.Link>
         </Nav.Item>
         <Nav.Item>
-          <Nav.Link onClick={() => pauseSong()}>⏯️ Pause/Play</Nav.Link>
+          <Nav.Link onClick={() => skipSong()}>⏭️ Skip</Nav.Link>
         </Nav.Item>
       </Nav>
       <Nav className="justify-content-center">
