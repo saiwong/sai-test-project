@@ -1,5 +1,9 @@
 @import 'bootstrap/dist/css/bootstrap.min.css';
 
+html {
+  scroll-behavior: smooth;
+}
+
 .fetchHack {
   width: 1px;
   height: 1px;

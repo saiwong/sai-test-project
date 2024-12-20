@@ -3,6 +3,7 @@ import { stringify } from 'querystring';
 import { titleCase } from "title-case";
 import Form from 'react-bootstrap/Form';
 import Accordion from 'react-bootstrap/Accordion';
+import { useAccordionButton } from 'react-bootstrap/AccordionButton';
 import Pagination from 'react-bootstrap/Pagination';
 import Table from 'react-bootstrap/Table';
 import { Converter } from 'opencc-js';
@@ -20,6 +21,7 @@ function Search() {
   const [singers, setSingers] = useState([]);
   const [page, setPage] = useState(0);
   const [fetchUrl, setFetchUrl] = useState('');
+  const [activeTabs, setActiveTabs] = useState(['singers', 'songs']);
 
   const pageSize = 25;
   const totalPages = Math.ceil(songs.length / pageSize);
@@ -34,6 +36,7 @@ function Search() {
       .map(({ item: { singer }}) => titleCase(singer.toLowerCase())));
 
     setSingers([...singersResults]);
+    setActiveTabs(['singers']);
   }
 
   function searchSongQuery(inputQuery, singer) {
@@ -55,11 +58,21 @@ function Search() {
     setSongQuery(inputQuery);
     setSongs(searchTitle(query));
     setPage(0);
+    setActiveTabs(['songs']);
   }
 
   function selectSinger(singer) {
     setSingerQuery(singer);
     searchSongQuery(songQuery, singer);
+
+    if (singer && singers.length > 5) {
+      setActiveTabs(['songs']);
+    }
+    scrollToTop();
+  }
+
+  function scrollToTop() {
+    window.scrollTo(0, 0);
   }
 
   async function queueSong(songId, cmd = 'Add1') {
@@ -84,13 +97,13 @@ function Search() {
 
     return (
       <Pagination className='justify-content-end'>
-        <Pagination.First disabled={page <= 0} onClick={() => setPage(0)} />
-        <Pagination.Prev disabled={page <= 0} onClick={() => setPage(page - 1)} />
+        <Pagination.First disabled={page <= 0} onClick={() => setPage(0) || scrollToTop()} />
+        <Pagination.Prev disabled={page <= 0} onClick={() => setPage(page - 1) || scrollToTop()} />
 
         <Pagination.Ellipsis />
 
-        <Pagination.Next disabled={page + 1 >= totalPages} onClick={() => setPage(page + 1)} />
-        <Pagination.Last disabled={page + 1 >= totalPages} onClick={() => setPage(totalPages - 1)} />
+        <Pagination.Next disabled={page + 1 >= totalPages} onClick={() => setPage(page + 1) || scrollToTop()} />
+        <Pagination.Last disabled={page + 1 >= totalPages} onClick={() => setPage(totalPages - 1) || scrollToTop()} />
       </Pagination>
     );
   }
@@ -118,17 +131,20 @@ function Search() {
         </Form.Group>
       </Form>    
 
-      <Accordion alwaysOpen="true">
-        <Accordion.Item>
-          <Accordion.Header>Matching Singers</Accordion.Header>
+      <Accordion
+          alwaysOpen="true"
+          activeKey={activeTabs}
+          onSelect={tabs => setActiveTabs(tabs)}>
+        <Accordion.Item eventKey="singers">
+          <Accordion.Header>Matching Singers {singers.length ? `(${singers.length})` : ''}</Accordion.Header>
           <Accordion.Body>
             {singers.map(singer =>
               <span className="singer link" onClick={() => selectSinger(singer)}>{converterSimp2Trad(singer)}</span>
             )}
           </Accordion.Body>
         </Accordion.Item>
-        <Accordion.Item>
-          <Accordion.Header>Matching Songs {singerQuery ? `for ${singerQuery}` : ''}</Accordion.Header>
+        <Accordion.Item eventKey="songs">
+          <Accordion.Header>Matching Songs {singerQuery ? `for ${singerQuery} ` : ''}{songs.length ? `(${songs.length})` : ''}</Accordion.Header>
           <Accordion.Body>
             {songPagination()}
 
