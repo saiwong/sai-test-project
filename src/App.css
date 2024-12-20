@@ -22,6 +22,10 @@
   padding: 0em;
 }
 
+.actions {
+  text-wrap-mode: nowrap;
+}
+
 .action {
   padding: 0.5em;
   color: blue;
