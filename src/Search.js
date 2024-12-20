@@ -3,7 +3,6 @@ import { stringify } from 'querystring';
 import { titleCase } from "title-case";
 import Form from 'react-bootstrap/Form';
 import Accordion from 'react-bootstrap/Accordion';
-import { useAccordionButton } from 'react-bootstrap/AccordionButton';
 import Pagination from 'react-bootstrap/Pagination';
 import Table from 'react-bootstrap/Table';
 import { Converter } from 'opencc-js';
@@ -14,13 +13,12 @@ import { useDebouncedCallback } from 'use-debounce';
 const converterTrad2Simp = Converter({ from: 'hk', to: 'cn' });
 const converterSimp2Trad = Converter({ from: 'cn', to: 'hk' });
 
-function Search() {
+function Search({ songServerHost }) {
   const [songs, setSongs] = useState([]);
   const [singerQuery, setSingerQuery] = useState('');
   const [songQuery, setSongQuery] = useState('');
   const [singers, setSingers] = useState([]);
   const [page, setPage] = useState(0);
-  const [fetchUrl, setFetchUrl] = useState('');
   const [activeTabs, setActiveTabs] = useState(['singers', 'songs']);
 
   const pageSize = 25;
@@ -77,7 +75,7 @@ function Search() {
 
   async function queueSong(songId, cmd = 'Add1') {
     // http://192.168.2.26:8084/demo/CommandServlet?jsonpCallback=jQuery111107815842212372168_1727462477689&cmd=Add1&cmdValue=00016959&_=1727462477843
-    const songserver = 'https://kmachine.tolbin.net/demo/CommandServlet'
+    const songserver = `${songServerHost}/demo/CommandServlet`;
     const query = stringify({
       cmd: cmd,
       cmdValue: songId,

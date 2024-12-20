@@ -7,7 +7,7 @@ import { Converter } from 'opencc-js';
 
 const converterSimp2Trad = Converter({ from: 'cn', to: 'hk' });
 
-function Playlist({ selected }) {
+function Playlist({ songServerHost, selected }) {
   const [playlist, setPlaylist] = useState([]);
 
   useEffect(() => {
@@ -25,7 +25,7 @@ function Playlist({ selected }) {
   async function getPlaylist() {
     // http://192.168.2.26:8084/demo/PlaylistServlet?jsonpCallback=jQuery11110772678249351443_1734639991156&onSelectPage=true&_=1734639991298
     // "[{"sINGER":"Michelle Branch","sONGBM":"00236161","sONGNAME":"Hopeless Romantic-mtv","xH":1073741832},{"sINGER":"Michelle Branch","sONGBM":"00235804","sONGNAME":"All you wanted-mtv","xH":1073741833},{"sINGER":"Michelle Branch","sONGBM":"00233517","sONGNAME":"TILL I GET OVER YOU-人物","xH":1073741834},{"sINGER":"MICHELLE BRANCH","sONGBM":"00047108","sONGNAME":"Loud Music","xH":1073741835}]"
-    const songserver = 'https://kmachine.tolbin.net/demo/PlaylistServlet'
+    const songserver = `${songServerHost}/demo/PlaylistServlet`;
     const query = stringify({
       onSelectPage: 'true',
       _: Date.now(),
@@ -38,6 +38,9 @@ function Playlist({ selected }) {
           setPlaylist(JSON.parse(data.songList)
             .map(({ sINGER: singer, sONGNAME: title, xH: id }) => ({ id, singer, title }))
           );
+        } else if (data.hasChange == "false") {
+          // somethign happened, we wait a bit and try again!
+          setTimeout(() => getPlaylist(), 250);
         } else {
           setPlaylist([]);
         }
@@ -45,8 +48,8 @@ function Playlist({ selected }) {
       .catch(err => console.error('command error', err));
   }
 
-  async function songAction(cmd, cmdValue) {
-    const songserver = 'https://kmachine.tolbin.net/demo/CommandServlet'
+  async function songAction(cmd, cmdValue, refresh = true) {
+    const songserver = `${songServerHost}/demo/CommandServlet`;
     const query = {
       cmd,
       cmdValue,
@@ -55,13 +58,13 @@ function Playlist({ selected }) {
 
     fetch(`${songserver}?${stringify(query)}`, { jsonpCallback: 'jsonpCallback' })
       .then(async (res) => console.log(res))
-      .then(() => getPlaylist())
+      .then(() => refresh ? getPlaylist() : false)
       .catch(err => console.error('command error', err));
     }
 
-  async function playSongNext(id) {
+  async function playSongNext(id, refresh = true) {
     // http://192.168.2.26:8084/demo/CommandServlet?jsonpCallback=jQuery11110772678249351443_1734639991156&cmd=Pro2&cmdValue=1073741834&_=1734639991311
-    songAction('Pro2', id);
+    songAction('Pro2', id, refresh);
   }
 
   async function deleteSong(id) {
@@ -94,6 +97,48 @@ function Playlist({ selected }) {
     songAction('Mute');
   }
 
+  // shuffle playlist
+  // algorithm:
+  //   - group by singer
+  //   - pick songs from each singer that is equal to their % of songs in the list
+  //   - iterate uniformly random on each singer until all the songs has been picked
+  async function shufflePlaylist() {
+    const shuffleArray = (array) => { 
+      for (let i = array.length - 1; i > 0; i--) { 
+        const j = Math.floor(Math.random() * (i + 1)); 
+        [array[i], array[j]] = [array[j], array[i]]; 
+      } 
+      return array; 
+    }; 
+
+    const songsBySinger = Object.values(playlist.reduce((o, item) => {
+        o[item.singer.toLowerCase()] = (o[item.singer.toLowerCase()] || []).concat(item);
+        return o;
+    }, {}));
+
+    const shuffledList = [];
+    const singerIndex = [...Array(songsBySinger.length).keys()].map(i => i);
+
+    while (shuffledList.length < playlist.length) {
+        shuffleArray(singerIndex).forEach(index => {
+            const items = songsBySinger[index];
+            let pickCount = Math.ceil(songsBySinger.length * items.length / playlist.length);
+            while (pickCount > 0) {
+                pickCount--;
+                const randomIndex = Math.floor(items.length * Math.random());
+                const item = items.splice(randomIndex, 1)[0];
+                shuffledList.unshift(item);
+            }
+        });
+    }
+
+    // enqueue each song in the shuffled order but only refresh playlist 
+    // when done
+    shuffledList.forEach(({ id }) => playSongNext(id, false));
+    getPlaylist();
+  }
+
+
   return (
     <div className="Playlist">
       <Nav className="justify-content-center">
@@ -113,6 +158,9 @@ function Playlist({ selected }) {
         </Nav.Item>
         <Nav.Item>
           <Nav.Link onClick={() => muteSong()}>🔇 Mute Music</Nav.Link>
+        </Nav.Item>
+        <Nav.Item>
+          <Nav.Link onClick={() => shufflePlaylist()}>🔀 Shuffle Songs</Nav.Link>
         </Nav.Item>
       </Nav>
       <Table striped bordered hover>
