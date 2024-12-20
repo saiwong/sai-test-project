@@ -34,9 +34,13 @@ function Playlist({ selected }) {
     fetch(`${songserver}?${query}`, { jsonpCallback: 'jsonpCallback' })
       .then(async (res) => await res.json())
       .then(data => {
-        setPlaylist(JSON.parse(data.songList)
-          .map(({ sINGER: singer, sONGNAME: title, xH: id }) => ({ id, singer, title }))
-        );
+        if (data.songList) {
+          setPlaylist(JSON.parse(data.songList)
+            .map(({ sINGER: singer, sONGNAME: title, xH: id }) => ({ id, singer, title }))
+          );
+        } else {
+          setPlaylist([]);
+        }
       })
       .catch(err => console.error('command error', err));
   }
