@@ -10,7 +10,7 @@
     <main class="app-shell">
       <nav class="view-tabs" aria-label="Views">
         <button class="view-tab is-active" type="button" data-view="search">Search</button>
-        <button class="view-tab" type="button" data-view="queue">Selected <span id="queue-count">0</span></button>
+        <button class="view-tab" type="button" data-view="queue">Playlist <span id="queue-count">0</span></button>
       </nav>
 
       <section id="search-view" class="view-panel">
@@ -41,7 +41,7 @@
       <section id="queue-view" class="view-panel" hidden>
         <div class="queue-toolbar">
           <div>
-            <h2>Selected</h2>
+            <h2>Playlist</h2>
             <p id="queue-summary">Loading...</p>
           </div>
           <div class="queue-actions">
@@ -50,7 +50,7 @@
           </div>
         </div>
         <ol id="queue-list" class="queue-list"></ol>
-        <div id="queue-empty" class="empty-state" hidden>No selected songs</div>
+        <div id="queue-empty" class="empty-state" hidden>No songs in playlist</div>
       </section>
 
       <section class="control-panel" aria-label="Playback controls">

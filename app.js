@@ -374,7 +374,7 @@ async function loadSelectedSongs(fullList) {
     }
   } catch (error) {
     if (state.activeView === "queue") {
-      queueSummaryEl.textContent = "Unable to load selected songs";
+      queueSummaryEl.textContent = "Unable to load playlist";
     }
     console.error(error);
   }
@@ -391,8 +391,8 @@ function renderPendingSelectedSongs(remoteCount) {
   const count = Number.isFinite(remoteCount) ? remoteCount : 0;
   const label = count === 1 ? "song" : "songs";
   queueSummaryEl.textContent = state.selectedRetryCount >= 6
-    ? `${count} selected ${label}; tap Refresh`
-    : `Loading ${count} selected ${label}...`;
+    ? `${count} ${label} in playlist; tap Refresh`
+    : `Loading ${count} playlist ${label}...`;
   queueEmptyEl.hidden = true;
   queueListEl.replaceChildren();
 }
@@ -472,7 +472,7 @@ function parseSelectedSongs(songList) {
 function renderSelectedSongs(remoteCount = state.selectedSongs.length) {
   const count = Number.isFinite(remoteCount) ? remoteCount : state.selectedSongs.length;
   const label = count === 1 ? "song" : "songs";
-  queueSummaryEl.textContent = `${count} selected ${label}`;
+  queueSummaryEl.textContent = `${count} ${label} in playlist`;
   queueEmptyEl.hidden = !(state.playlistCount === 0 && state.selectedSongs.length === 0);
   queueListEl.replaceChildren(...state.selectedSongs.map((song, index) => renderQueueItem(song, index)));
 }
@@ -552,7 +552,7 @@ async function randomizeSelectedSongs() {
 
   const candidates = state.selectedSongs.filter((song) => song.rowId);
   if (candidates.length < 2) {
-    statusEl.textContent = "Need at least two selected songs";
+    statusEl.textContent = "Need at least two songs in playlist";
     return;
   }
 
@@ -568,7 +568,7 @@ async function randomizeSelectedSongs() {
       await sendCommand("Pro2", promoteOrder[index].rowId);
     }
 
-    statusEl.textContent = "Randomized selected songs";
+    statusEl.textContent = "Randomized playlist";
   } catch (error) {
     statusEl.textContent = "Randomize failed";
     console.error(error);

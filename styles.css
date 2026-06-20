@@ -700,6 +700,10 @@ h1 {
   background: var(--panel-soft);
 }
 
+.empty-state[hidden] {
+  display: none;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
