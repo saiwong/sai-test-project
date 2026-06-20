@@ -8,41 +8,66 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true"></div>
-          <div>
-            <h1>KTV Finder</h1>
-            <p id="status">Loading song index...</p>
+      <nav class="view-tabs" aria-label="Views">
+        <button class="view-tab is-active" type="button" data-view="search">Search</button>
+        <button class="view-tab" type="button" data-view="queue">Selected <span id="queue-count">0</span></button>
+      </nav>
+
+      <section id="search-view" class="view-panel">
+        <div class="search-band" aria-label="Song search">
+          <div class="search-row">
+            <label class="sr-only" for="query">Search songs or singers</label>
+            <input id="query" type="search" autocomplete="off" spellcheck="false" placeholder="Song or singer" autofocus>
+            <button id="clear-search" class="icon-button" type="button" aria-label="Clear search" title="Clear search">x</button>
+          </div>
+
+          <div class="mode-row" aria-label="Search target">
+            <button class="mode-button is-active" type="button" data-mode="all">All</button>
+            <button class="mode-button" type="button" data-mode="title">Songs</button>
+            <button class="mode-button" type="button" data-mode="singer">Singers</button>
           </div>
         </div>
-        <div class="library-count" aria-label="Song library size">
-          <span id="song-count">...</span>
-          <span>songs</span>
-        </div>
-      </header>
 
-      <section class="search-band" aria-label="Song search">
-        <div class="search-row">
-          <label class="sr-only" for="query">Search songs or singers</label>
-          <input id="query" type="search" autocomplete="off" spellcheck="false" placeholder="Song or singer" autofocus>
-          <button id="clear-search" class="icon-button" type="button" aria-label="Clear search" title="Clear search">x</button>
-        </div>
-
-        <div class="mode-row" aria-label="Search target">
-          <button class="mode-button is-active" type="button" data-mode="all">All</button>
-          <button class="mode-button" type="button" data-mode="title">Songs</button>
-          <button class="mode-button" type="button" data-mode="singer">Singers</button>
-        </div>
+        <section class="results-band" aria-live="polite" aria-busy="true">
+          <div class="result-meta">
+            <span id="result-summary">Preparing index</span>
+            <span id="elapsed"></span>
+          </div>
+          <ol id="results" class="results"></ol>
+          <div id="empty-state" class="empty-state" hidden>No matches</div>
+        </section>
       </section>
 
-      <section class="results-band" aria-live="polite" aria-busy="true">
-        <div class="result-meta">
-          <span id="result-summary">Preparing index</span>
-          <span id="elapsed"></span>
+      <section id="queue-view" class="view-panel" hidden>
+        <div class="queue-toolbar">
+          <div>
+            <h2>Selected</h2>
+            <p id="queue-summary">Loading...</p>
+          </div>
+          <div class="queue-actions">
+            <button id="refresh-queue" class="secondary-button" type="button">Refresh</button>
+            <button id="randomize-queue" class="secondary-button accent" type="button">Randomize</button>
+          </div>
         </div>
-        <ol id="results" class="results"></ol>
-        <div id="empty-state" class="empty-state" hidden>No matches</div>
+        <ol id="queue-list" class="queue-list"></ol>
+        <div id="queue-empty" class="empty-state" hidden>No selected songs</div>
+      </section>
+
+      <section class="control-panel" aria-label="Playback controls">
+        <div class="remote-body">
+          <div class="remote-grid">
+            <button class="control-button remote-pill" type="button" data-command="Mute">Mute</button>
+            <button class="control-button remote-pill" type="button" data-command="MuOr">Vocal</button>
+            <button class="control-button rocker-button" type="button" data-command="Music_down">Vol -</button>
+            <button class="control-button rocker-button" type="button" data-command="Music_up">Vol +</button>
+            <button class="control-button transport-button" type="button" data-command="Reset">Replay</button>
+            <button class="control-button transport-button primary" type="button" data-command="Play">Play</button>
+            <button class="control-button transport-button" type="button" data-command="Skip">Skip</button>
+            <button class="control-button rocker-button" type="button" data-command="Tone_down">Pitch -</button>
+            <button class="control-button rocker-button" type="button" data-command="Tone_up">Pitch +</button>
+          </div>
+          <p id="status" class="remote-status">Loading song index...</p>
+        </div>
       </section>
     </main>
 
