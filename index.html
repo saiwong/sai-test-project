@@ -11,6 +11,10 @@
       <nav class="view-tabs" aria-label="Views">
         <button class="view-tab is-active" type="button" data-view="search">Search</button>
         <button class="view-tab" type="button" data-view="queue">Playlist <span id="queue-count">0</span></button>
+        <div class="language-toggle" aria-label="Interface language">
+          <button class="language-button is-active" type="button" data-lang="en">EN</button>
+          <button class="language-button" type="button" data-lang="zh">中</button>
+        </div>
       </nav>
 
       <section id="search-view" class="view-panel">
@@ -61,7 +65,7 @@
             <button class="control-button rocker-button" type="button" data-command="Music_down">Vol -</button>
             <button class="control-button rocker-button" type="button" data-command="Music_up">Vol +</button>
             <button class="control-button transport-button" type="button" data-command="Reset">Replay</button>
-            <button class="control-button transport-button primary" type="button" data-command="Play">Play</button>
+            <button class="control-button transport-button primary" type="button" data-command="Play">Play/Pause</button>
             <button class="control-button transport-button" type="button" data-command="Skip">Skip</button>
             <button class="control-button rocker-button" type="button" data-command="Tone_down">Pitch -</button>
             <button class="control-button rocker-button" type="button" data-command="Tone_up">Pitch +</button>

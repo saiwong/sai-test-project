@@ -9,6 +9,7 @@ const emptyStateEl = document.querySelector("#empty-state");
 const resultsBand = document.querySelector(".results-band");
 const modeButtons = [...document.querySelectorAll(".mode-button")];
 const viewButtons = [...document.querySelectorAll(".view-tab")];
+const languageButtons = [...document.querySelectorAll(".language-button")];
 const searchView = document.querySelector("#search-view");
 const queueView = document.querySelector("#queue-view");
 const controlButtons = [...document.querySelectorAll(".control-button")];
@@ -24,31 +25,307 @@ const SONG_SERVER_HOST = getSongServerHost();
 const COMMAND_ENDPOINT = `${SONG_SERVER_HOST}/demo/CommandServlet`;
 const PLAYLIST_ENDPOINT = `${SONG_SERVER_HOST}/demo/PlaylistServlet`;
 const SELECTED_SONGS_CACHE_KEY = `ktv-selected-songs:${SONG_SERVER_HOST}`;
+const LANGUAGE_CACHE_KEY = "ktv-interface-language";
 const ADD_COMMAND = "Add1";
-const COMMAND_LABELS = {
-  Skip: "Skipped",
-  Play: "Play/Pause",
-  Reset: "Replay",
-  Mute: "Mute",
-  MuOr: "Vocal",
-  Music_down: "Vol -",
-  Music_up: "Vol +",
-  Tone_down: "Pitch -",
-  Tone_up: "Pitch +",
-  Pro2: "Moved next",
-  Del1: "Removed"
+const COMMAND_LABEL_KEYS = {
+  Skip: "command.skip",
+  Play: "command.playPause",
+  Reset: "command.replay",
+  Mute: "command.mute",
+  MuOr: "command.vocal",
+  Music_down: "command.volumeDown",
+  Music_up: "command.volumeUp",
+  Tone_down: "command.pitchDown",
+  Tone_up: "command.pitchUp"
+};
+const VIEW_LABEL_KEYS = {
+  search: "view.search",
+  queue: "view.playlist"
+};
+const MODE_LABEL_KEYS = {
+  all: "mode.all",
+  title: "mode.songs",
+  singer: "mode.singers"
+};
+const VIEW_ICON_NAMES = {
+  search: "search",
+  queue: "list"
+};
+const MODE_ICON_NAMES = {
+  all: "asterisk",
+  title: "music",
+  singer: "mic"
+};
+const COMMAND_ICON_NAMES = {
+  Skip: "skipForward",
+  Play: "playPause",
+  Reset: "rotateCcw",
+  Mute: "volumeX",
+  MuOr: "mic",
+  Music_down: "volumeMinus",
+  Music_up: "volumePlus",
+  Tone_down: "chevronDown",
+  Tone_up: "chevronUp"
+};
+const ICON_NODES = {
+  arrowUp: [
+    ["path", { d: "M12 19V5" }],
+    ["path", { d: "m5 12 7-7 7 7" }]
+  ],
+  asterisk: [
+    ["path", { d: "M12 3v18" }],
+    ["path", { d: "M3 12h18" }],
+    ["path", { d: "m5.6 5.6 12.8 12.8" }],
+    ["path", { d: "m18.4 5.6-12.8 12.8" }]
+  ],
+  chevronDown: [
+    ["path", { d: "m6 9 6 6 6-6" }]
+  ],
+  chevronUp: [
+    ["path", { d: "m18 15-6-6-6 6" }]
+  ],
+  list: [
+    ["path", { d: "M8 6h13" }],
+    ["path", { d: "M8 12h13" }],
+    ["path", { d: "M8 18h13" }],
+    ["path", { d: "M3 6h.01" }],
+    ["path", { d: "M3 12h.01" }],
+    ["path", { d: "M3 18h.01" }]
+  ],
+  mic: [
+    ["path", { d: "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" }],
+    ["path", { d: "M19 10v2a7 7 0 0 1-14 0v-2" }],
+    ["path", { d: "M12 19v3" }],
+    ["path", { d: "M8 22h8" }]
+  ],
+  music: [
+    ["path", { d: "M9 18V5l12-2v13" }],
+    ["circle", { cx: "6", cy: "18", r: "3" }],
+    ["circle", { cx: "18", cy: "16", r: "3" }]
+  ],
+  playPause: [
+    ["path", { d: "M6 4v16l8-8-8-8Z" }],
+    ["path", { d: "M17 5v14" }],
+    ["path", { d: "M21 5v14" }]
+  ],
+  refreshCw: [
+    ["path", { d: "M21 12a9 9 0 1 1-2.6-6.4" }],
+    ["path", { d: "M21 3v6h-6" }]
+  ],
+  rotateCcw: [
+    ["path", { d: "M3 12a9 9 0 1 0 3-6.7" }],
+    ["path", { d: "M3 4v6h6" }]
+  ],
+  search: [
+    ["circle", { cx: "11", cy: "11", r: "7" }],
+    ["path", { d: "m20 20-4-4" }]
+  ],
+  shuffle: [
+    ["path", { d: "M16 3h5v5" }],
+    ["path", { d: "M4 20 21 3" }],
+    ["path", { d: "M21 16v5h-5" }],
+    ["path", { d: "M15 15l6 6" }],
+    ["path", { d: "M4 4l5 5" }]
+  ],
+  skipForward: [
+    ["path", { d: "M5 4v16l10-8-10-8Z" }],
+    ["path", { d: "M19 5v14" }]
+  ],
+  trash: [
+    ["path", { d: "M3 6h18" }],
+    ["path", { d: "M8 6V4h8v2" }],
+    ["path", { d: "M6 6l1 15h10l1-15" }],
+    ["path", { d: "M10 11v6" }],
+    ["path", { d: "M14 11v6" }]
+  ],
+  volumeMinus: [
+    ["path", { d: "M11 5 6 9H3v6h3l5 4V5Z" }],
+    ["path", { d: "M16 12h5" }]
+  ],
+  volumePlus: [
+    ["path", { d: "M11 5 6 9H3v6h3l5 4V5Z" }],
+    ["path", { d: "M16 12h5" }],
+    ["path", { d: "M18.5 9.5v5" }]
+  ],
+  volumeX: [
+    ["path", { d: "M11 5 6 9H3v6h3l5 4V5Z" }],
+    ["path", { d: "m16 9 5 6" }],
+    ["path", { d: "m21 9-5 6" }]
+  ],
+  x: [
+    ["path", { d: "M18 6 6 18" }],
+    ["path", { d: "m6 6 12 12" }]
+  ]
+};
+const TEXT = {
+  en: {
+    "app.title": "KTV Finder",
+    "aria.views": "Views",
+    "aria.language": "Interface language",
+    "aria.search": "Song search",
+    "aria.searchTarget": "Search target",
+    "aria.controls": "Playback controls",
+    "view.search": "Search",
+    "view.playlist": "Playlist",
+    "search.label": "Search songs or singers",
+    "search.placeholder": "Song or singer",
+    "action.clearSearch": "Clear search",
+    "mode.all": "All",
+    "mode.songs": "Songs",
+    "mode.singers": "Singers",
+    "result.preparing": "Preparing index",
+    "result.noMatches": "No matches",
+    "result.songBy": "{count} song by {singer}",
+    "result.songsBy": "{count} songs by {singer}",
+    "result.singer": "{count} singer",
+    "result.singers": "{count} singers",
+    "result.showingSingers": "Showing {count} singers",
+    "result.match": "{count} match",
+    "result.matches": "{count} matches",
+    "result.showingSongs": "Showing {count} songs",
+    "singer.song": "{count} song",
+    "singer.songs": "{count} songs",
+    "singer.view": "View",
+    "aria.showSinger": "Show songs by {singer}",
+    "aria.addSong": "Add {title} by {singer} to queue",
+    "action.addToQueue": "Add to queue",
+    "queue.title": "Playlist",
+    "queue.loading": "Loading...",
+    "queue.empty": "No songs in playlist",
+    "queue.unable": "Unable to load playlist",
+    "queue.songInPlaylist": "{count} song in playlist",
+    "queue.songsInPlaylist": "{count} songs in playlist",
+    "queue.songInPlaylistRefresh": "{count} song in playlist; tap Refresh",
+    "queue.songsInPlaylistRefresh": "{count} songs in playlist; tap Refresh",
+    "queue.loadingSong": "Loading {count} playlist song...",
+    "queue.loadingSongs": "Loading {count} playlist songs...",
+    "queue.refresh": "Refresh",
+    "queue.randomize": "Randomize",
+    "queue.next": "Next",
+    "queue.remove": "Remove",
+    "queue.unknownSinger": "Unknown singer",
+    "queue.untitled": "Untitled",
+    "status.loadingIndex": "Loading song index...",
+    "status.ready": "Ready",
+    "status.indexFailed": "Index failed to load",
+    "status.workerFailed": "Search worker failed",
+    "status.unableIndex": "Unable to load index",
+    "status.sent": "{action} sent",
+    "status.failed": "{action} failed",
+    "status.movedNext": "Moved next",
+    "status.removed": "Removed",
+    "status.needTwoSongs": "Need at least two songs in playlist",
+    "status.randomizing": "Randomizing {current}/{total}",
+    "status.randomized": "Randomized playlist",
+    "status.randomizeFailed": "Randomize failed",
+    "status.sending": "Sending",
+    "status.queued": "Queued",
+    "status.queuedCount": "Queued x{count}",
+    "status.queueFailed": "Queue failed",
+    "status.failedQueued": "Failed; queued x{count}",
+    "status.queuedTitle": "{status}: {title}",
+    "command.skip": "Skip",
+    "command.playPause": "Play/Pause",
+    "command.replay": "Replay",
+    "command.mute": "Mute",
+    "command.vocal": "Vocal",
+    "command.volumeDown": "Vol -",
+    "command.volumeUp": "Vol +",
+    "command.pitchDown": "Pitch -",
+    "command.pitchUp": "Pitch +"
+  },
+  zh: {
+    "app.title": "KTV 点歌",
+    "aria.views": "视图",
+    "aria.language": "界面语言",
+    "aria.search": "歌曲搜索",
+    "aria.searchTarget": "搜索范围",
+    "aria.controls": "播放控制",
+    "view.search": "搜索",
+    "view.playlist": "歌单",
+    "search.label": "搜索歌曲或歌手",
+    "search.placeholder": "歌曲或歌手",
+    "action.clearSearch": "清除搜索",
+    "mode.all": "全部",
+    "mode.songs": "歌曲",
+    "mode.singers": "歌手",
+    "result.preparing": "正在准备歌库",
+    "result.noMatches": "没有结果",
+    "result.songBy": "{singer}：{count} 首歌",
+    "result.songsBy": "{singer}：{count} 首歌",
+    "result.singer": "{count} 位歌手",
+    "result.singers": "{count} 位歌手",
+    "result.showingSingers": "显示 {count} 位歌手",
+    "result.match": "{count} 个结果",
+    "result.matches": "{count} 个结果",
+    "result.showingSongs": "显示 {count} 首歌",
+    "singer.song": "{count} 首歌",
+    "singer.songs": "{count} 首歌",
+    "singer.view": "查看",
+    "aria.showSinger": "查看 {singer} 的歌曲",
+    "aria.addSong": "加入歌单：{title}，{singer}",
+    "action.addToQueue": "加入歌单",
+    "queue.title": "歌单",
+    "queue.loading": "加载中...",
+    "queue.empty": "歌单为空",
+    "queue.unable": "无法加载歌单",
+    "queue.songInPlaylist": "歌单中有 {count} 首歌",
+    "queue.songsInPlaylist": "歌单中有 {count} 首歌",
+    "queue.songInPlaylistRefresh": "歌单中有 {count} 首歌；点刷新",
+    "queue.songsInPlaylistRefresh": "歌单中有 {count} 首歌；点刷新",
+    "queue.loadingSong": "正在加载 {count} 首歌...",
+    "queue.loadingSongs": "正在加载 {count} 首歌...",
+    "queue.refresh": "刷新",
+    "queue.randomize": "随机排序",
+    "queue.next": "置顶",
+    "queue.remove": "删除",
+    "queue.unknownSinger": "未知歌手",
+    "queue.untitled": "未命名",
+    "status.loadingIndex": "正在加载歌库...",
+    "status.ready": "就绪",
+    "status.indexFailed": "歌库加载失败",
+    "status.workerFailed": "搜索加载失败",
+    "status.unableIndex": "无法加载歌库",
+    "status.sent": "{action}已发送",
+    "status.failed": "{action}失败",
+    "status.movedNext": "已置顶",
+    "status.removed": "已删除",
+    "status.needTwoSongs": "歌单至少需要两首歌",
+    "status.randomizing": "随机排序 {current}/{total}",
+    "status.randomized": "歌单已随机排序",
+    "status.randomizeFailed": "随机排序失败",
+    "status.sending": "发送中",
+    "status.queued": "已加入",
+    "status.queuedCount": "已加入 x{count}",
+    "status.queueFailed": "加入失败",
+    "status.failedQueued": "失败；已加入 x{count}",
+    "status.queuedTitle": "{status}：{title}",
+    "command.skip": "切歌",
+    "command.playPause": "播放/暂停",
+    "command.replay": "重唱",
+    "command.mute": "静音",
+    "command.vocal": "原唱",
+    "command.volumeDown": "音量-",
+    "command.volumeUp": "音量+",
+    "command.pitchDown": "降调",
+    "command.pitchUp": "升调"
+  }
 };
 
 const state = {
   ready: false,
+  language: getInitialLanguage(),
   activeView: "search",
   mode: "all",
   query: "",
   singerFilter: "",
+  statusKey: "status.loadingIndex",
+  statusValues: {},
   pendingTimer: 0,
   requestId: 0,
   lastResults: [],
   lastSingers: [],
+  lastResultMessage: null,
   visibleSongs: new Map(),
   queueState: new Map(),
   selectedSongs: loadSelectedSongsCache(),
@@ -59,6 +336,7 @@ const state = {
 };
 
 updatePlaylistCount(state.selectedSongs.length);
+applyLanguage();
 
 const worker = new Worker(`search-worker.js?v=${Date.now()}`);
 let jsonpSequence = 0;
@@ -79,15 +357,223 @@ function getSongServerHost() {
   }
 }
 
+function getInitialLanguage() {
+  const params = new URLSearchParams(window.location.search);
+  const rawUrlLanguage = params.get("lang");
+  if (String(rawUrlLanguage || "").trim().toLowerCase() === "auto") {
+    clearSavedLanguage();
+    return detectLocaleLanguage();
+  }
+
+  const urlLanguage = normalizeLanguage(params.get("lang"));
+  if (urlLanguage) {
+    saveLanguage(urlLanguage);
+    return urlLanguage;
+  }
+
+  try {
+    return normalizeLanguage(window.localStorage.getItem(LANGUAGE_CACHE_KEY)) || detectLocaleLanguage();
+  } catch (error) {
+    console.warn("Unable to read interface language", error);
+    return detectLocaleLanguage();
+  }
+}
+
+function normalizeLanguage(value) {
+  const language = String(value || "").trim().toLowerCase();
+  if (!language) return "";
+  if (
+    language === "cn" ||
+    language === "zh" ||
+    language.startsWith("zh-") ||
+    language === "cmn" ||
+    language.startsWith("cmn-") ||
+    language === "yue" ||
+    language.startsWith("yue-")
+  ) {
+    return "zh";
+  }
+  if (language === "en" || language.startsWith("en-")) return "en";
+  return "";
+}
+
+function detectLocaleLanguage() {
+  const locales = [];
+  if (Array.isArray(navigator.languages)) locales.push(...navigator.languages);
+  if (navigator.language) locales.push(navigator.language);
+  if (navigator.userLanguage) locales.push(navigator.userLanguage);
+
+  for (const locale of locales) {
+    const language = normalizeLanguage(locale);
+    if (language) return language;
+  }
+
+  return "en";
+}
+
+function saveLanguage(language) {
+  try {
+    window.localStorage.setItem(LANGUAGE_CACHE_KEY, language);
+  } catch (error) {
+    console.warn("Unable to save interface language", error);
+  }
+}
+
+function clearSavedLanguage() {
+  try {
+    window.localStorage.removeItem(LANGUAGE_CACHE_KEY);
+  } catch (error) {
+    console.warn("Unable to clear interface language", error);
+  }
+}
+
+function setLanguage(language) {
+  const nextLanguage = normalizeLanguage(language);
+  if (!nextLanguage || nextLanguage === state.language) return;
+
+  state.language = nextLanguage;
+  saveLanguage(nextLanguage);
+  applyLanguage();
+
+  if (state.lastResultMessage) {
+    renderResults(state.lastResultMessage);
+  }
+  renderSelectedSongs(state.playlistCount ?? state.selectedSongs.length);
+  updateStatusDisplay();
+}
+
+function applyLanguage() {
+  document.documentElement.lang = state.language === "zh" ? "zh-Hans" : "en";
+  document.title = t("app.title");
+
+  document.querySelector(".view-tabs")?.setAttribute("aria-label", t("aria.views"));
+  document.querySelector(".language-toggle")?.setAttribute("aria-label", t("aria.language"));
+  document.querySelector(".search-band")?.setAttribute("aria-label", t("aria.search"));
+  document.querySelector(".mode-row")?.setAttribute("aria-label", t("aria.searchTarget"));
+  document.querySelector(".control-panel")?.setAttribute("aria-label", t("aria.controls"));
+
+  viewButtons.forEach((button) => {
+    const count = button.querySelector("#queue-count");
+    const label = t(VIEW_LABEL_KEYS[button.dataset.view] || button.dataset.view);
+    setButtonContent(button, VIEW_ICON_NAMES[button.dataset.view], label, count ? [count] : []);
+  });
+
+  languageButtons.forEach((button) => {
+    const active = button.dataset.lang === state.language;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+
+  modeButtons.forEach((button) => {
+    setButtonContent(
+      button,
+      MODE_ICON_NAMES[button.dataset.mode],
+      t(MODE_LABEL_KEYS[button.dataset.mode] || button.dataset.mode)
+    );
+  });
+
+  controlButtons.forEach((button) => {
+    setButtonContent(button, COMMAND_ICON_NAMES[button.dataset.command], commandLabel(button.dataset.command));
+  });
+
+  const searchLabel = document.querySelector("label[for='query']");
+  if (searchLabel) searchLabel.textContent = t("search.label");
+  queryInput.placeholder = t("search.placeholder");
+  setButtonContent(clearButton, "x", "");
+  clearButton.setAttribute("aria-label", t("action.clearSearch"));
+  clearButton.title = t("action.clearSearch");
+  setButtonContent(refreshQueueButton, "refreshCw", t("queue.refresh"));
+  setButtonContent(randomizeQueueButton, "shuffle", t("queue.randomize"));
+  document.querySelector(".queue-toolbar h2").textContent = t("queue.title");
+  emptyStateEl.textContent = t("result.noMatches");
+  queueEmptyEl.textContent = t("queue.empty");
+
+  if (!state.lastResultMessage) {
+    resultSummaryEl.textContent = t("result.preparing");
+  }
+  if (queueSummaryEl.textContent.trim() === "" || queueSummaryEl.textContent === "Loading...") {
+    queueSummaryEl.textContent = t("queue.loading");
+  }
+  updateStatusDisplay();
+}
+
+function t(key, values = {}) {
+  const text = TEXT[state.language]?.[key] ?? TEXT.en[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (match, name) => values[name] ?? match);
+}
+
+function formatCount(count) {
+  const locale = state.language === "zh" ? "zh-Hans" : "en-US";
+  return Number(count || 0).toLocaleString(locale);
+}
+
+function chooseByCount(count, singularKey, pluralKey, values = {}) {
+  const key = count === 1 ? singularKey : pluralKey;
+  return t(key, { ...values, count: formatCount(count) });
+}
+
+function commandLabel(cmd) {
+  return t(COMMAND_LABEL_KEYS[cmd] || cmd);
+}
+
+function setButtonContent(element, iconName, label, extraNodes = []) {
+  const children = [];
+  if (iconName) children.push(createButtonIcon(iconName));
+  if (label) children.push(createButtonLabel(label));
+  children.push(...extraNodes);
+  element.replaceChildren(...children);
+}
+
+function createButtonIcon(iconName) {
+  const span = document.createElement("span");
+  span.className = "button-icon";
+  span.setAttribute("aria-hidden", "true");
+  span.append(createSvgIcon(iconName));
+  return span;
+}
+
+function createButtonLabel(label) {
+  const span = document.createElement("span");
+  span.className = "button-label";
+  span.textContent = label;
+  return span;
+}
+
+function createSvgIcon(iconName) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("focusable", "false");
+
+  (ICON_NODES[iconName] || ICON_NODES.asterisk).forEach(([tag, attributes]) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attributes).forEach(([name, value]) => {
+      node.setAttribute(name, value);
+    });
+    svg.append(node);
+  });
+
+  return svg;
+}
+
+function setStatus(key, values = {}) {
+  state.statusKey = key;
+  state.statusValues = values;
+  updateStatusDisplay();
+}
+
+function updateStatusDisplay() {
+  statusEl.textContent = t(state.statusKey, state.statusValues);
+}
+
 worker.addEventListener("message", (event) => {
   const message = event.data;
 
   if (message.type === "ready") {
     state.ready = true;
     if (songCountEl) {
-      songCountEl.textContent = message.count.toLocaleString();
+      songCountEl.textContent = formatCount(message.count);
     }
-    statusEl.textContent = "Ready";
+    setStatus("status.ready");
     resultsBand.setAttribute("aria-busy", "false");
     searchNow();
     loadSelectedSongs(false);
@@ -98,9 +584,9 @@ worker.addEventListener("message", (event) => {
   }
 
   if (message.type === "error") {
-    statusEl.textContent = message.message || "Index failed to load";
+    setStatus("status.indexFailed");
     resultsBand.setAttribute("aria-busy", "false");
-    resultSummaryEl.textContent = "Unable to load index";
+    resultSummaryEl.textContent = t("status.unableIndex");
     return;
   }
 
@@ -111,8 +597,8 @@ worker.addEventListener("message", (event) => {
 });
 
 worker.addEventListener("error", () => {
-  statusEl.textContent = "Search worker failed";
-  resultSummaryEl.textContent = "Unable to load index";
+  setStatus("status.workerFailed");
+  resultSummaryEl.textContent = t("status.unableIndex");
   resultsBand.setAttribute("aria-busy", "false");
 });
 
@@ -139,6 +625,12 @@ modeButtons.forEach((button) => {
     state.singerFilter = "";
     modeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     searchNow();
+  });
+});
+
+languageButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setLanguage(button.dataset.lang);
   });
 });
 
@@ -257,23 +749,23 @@ function renderResults(message) {
   const singers = message.singers || [];
   const totalSingers = Number(message.totalSingerMatches || 0);
   resultsBand.dataset.query = query;
+  state.lastResultMessage = message;
   state.lastResults = message.results;
   state.lastSingers = singers;
   state.visibleSongs = new Map(message.results.map((song) => [song.id, song]));
 
   if (message.singerFilter) {
-    const label = total === 1 ? "song" : "songs";
-    resultSummaryEl.textContent = `${total.toLocaleString()} ${label} by ${message.singerFilter}`;
+    resultSummaryEl.textContent = chooseByCount(total, "result.songBy", "result.songsBy", {
+      singer: message.singerFilter
+    });
   } else if (state.mode === "singer") {
-    const singerLabel = totalSingers === 1 ? "singer" : "singers";
     resultSummaryEl.textContent = query
-      ? `${totalSingers.toLocaleString()} ${singerLabel}`
-      : `Showing ${singers.length.toLocaleString()} singers`;
+      ? chooseByCount(totalSingers, "result.singer", "result.singers")
+      : t("result.showingSingers", { count: formatCount(singers.length) });
   } else if (query) {
-    const label = total === 1 ? "match" : "matches";
-    resultSummaryEl.textContent = `${total.toLocaleString()} ${label}`;
+    resultSummaryEl.textContent = chooseByCount(total, "result.match", "result.matches");
   } else {
-    resultSummaryEl.textContent = `Showing ${shown.toLocaleString()} songs`;
+    resultSummaryEl.textContent = t("result.showingSongs", { count: formatCount(shown) });
   }
 
   elapsedEl.textContent = `${message.elapsedMs.toFixed(0)} ms`;
@@ -294,7 +786,7 @@ function renderSinger(singer, query) {
   li.dataset.singer = singer.name;
   li.tabIndex = 0;
   li.setAttribute("role", "button");
-  li.setAttribute("aria-label", `Show songs by ${singer.name}`);
+  li.setAttribute("aria-label", t("aria.showSinger", { singer: singer.name }));
 
   const main = document.createElement("div");
   main.className = "song-main";
@@ -305,8 +797,7 @@ function renderSinger(singer, query) {
 
   const meta = document.createElement("span");
   meta.className = "song-singer";
-  const label = singer.count === 1 ? "song" : "songs";
-  meta.textContent = `${singer.count.toLocaleString()} ${label}`;
+  meta.textContent = chooseByCount(singer.count, "singer.song", "singer.songs");
 
   main.append(title, meta);
 
@@ -315,7 +806,7 @@ function renderSinger(singer, query) {
 
   const action = document.createElement("span");
   action.className = "singer-action";
-  action.textContent = "View";
+  setButtonContent(action, "list", t("singer.view"));
 
   side.append(action);
   li.append(main, side);
@@ -329,7 +820,10 @@ function renderSong(song, query) {
   li.dataset.songId = song.id;
   li.tabIndex = 0;
   li.setAttribute("role", "button");
-  li.setAttribute("aria-label", `Add ${song.title} by ${song.singer || "Unknown singer"} to queue`);
+  li.setAttribute("aria-label", t("aria.addSong", {
+    title: song.title,
+    singer: song.singer || t("queue.unknownSinger")
+  }));
   if (queueStatus) {
     li.dataset.queueState = queueStatus.status;
   }
@@ -343,7 +837,7 @@ function renderSong(song, query) {
 
   const singer = document.createElement("span");
   singer.className = "song-singer";
-  singer.append(...highlightText(song.singer || "Unknown singer", query));
+  singer.append(...highlightText(song.singer || t("queue.unknownSinger"), query));
 
   main.append(title, singer);
 
@@ -355,7 +849,7 @@ function renderSong(song, query) {
 
   const queueButton = document.createElement("span");
   queueButton.className = "queue-button";
-  queueButton.title = "Add to queue";
+  queueButton.title = t("action.addToQueue");
   queueButton.setAttribute("aria-hidden", "true");
   queueButton.textContent = queueButtonText(queueStatus);
 
@@ -370,7 +864,7 @@ function renderSong(song, query) {
 
   const queueNote = document.createElement("span");
   queueNote.className = "queue-status";
-  queueNote.textContent = queueStatus?.message || "";
+  queueNote.textContent = queueStatusMessage(queueStatus);
 
   actionRow.append(queueButton);
   side.append(actionRow, tags, queueNote);
@@ -400,15 +894,15 @@ function setActiveView(view) {
 async function sendRemoteCommand(cmd, cmdValue, button) {
   if (!cmd || button?.disabled) return;
 
-  const label = COMMAND_LABELS[cmd] || cmd;
+  const label = commandLabel(cmd);
   button?.classList.add("is-busy");
   if (button) button.disabled = true;
 
   try {
     await sendCommand(cmd, cmdValue);
-    statusEl.textContent = `${label} sent`;
+    setStatus("status.sent", { action: label });
   } catch (error) {
-    statusEl.textContent = `${label} failed`;
+    setStatus("status.failed", { action: label });
     console.error(error);
   } finally {
     await loadSelectedSongs(true);
@@ -452,7 +946,7 @@ async function loadSelectedSongs(fullList) {
     }
   } catch (error) {
     if (state.activeView === "queue") {
-      queueSummaryEl.textContent = "Unable to load playlist";
+      queueSummaryEl.textContent = t("queue.unable");
     }
     console.error(error);
   }
@@ -467,10 +961,9 @@ function renderPendingSelectedSongs(remoteCount) {
   }
 
   const count = Number.isFinite(remoteCount) ? remoteCount : 0;
-  const label = count === 1 ? "song" : "songs";
   queueSummaryEl.textContent = state.selectedRetryCount >= 6
-    ? `${count} ${label} in playlist; tap Refresh`
-    : `Loading ${count} playlist ${label}...`;
+    ? chooseByCount(count, "queue.songInPlaylistRefresh", "queue.songsInPlaylistRefresh")
+    : chooseByCount(count, "queue.loadingSong", "queue.loadingSongs");
   queueEmptyEl.hidden = true;
   queueListEl.replaceChildren();
 }
@@ -490,7 +983,7 @@ function loadSelectedSongsCache() {
       index,
       rowId: String(song.rowId || ""),
       songId: String(song.songId || ""),
-      title: String(song.title || "Untitled"),
+      title: String(song.title || ""),
       singer: String(song.singer || "")
     }));
   } catch (error) {
@@ -538,7 +1031,7 @@ function parseSelectedSongs(songList) {
       index,
       rowId: String(song.xH ?? song.XH ?? ""),
       songId: String(song.sONGBM ?? song.id ?? ""),
-      title: String(song.sONGNAME ?? song.title ?? "Untitled"),
+      title: String(song.sONGNAME ?? song.title ?? ""),
       singer: String(song.sINGER ?? song.singer ?? "")
     }));
   } catch (error) {
@@ -549,8 +1042,7 @@ function parseSelectedSongs(songList) {
 
 function renderSelectedSongs(remoteCount = state.selectedSongs.length) {
   const count = Number.isFinite(remoteCount) ? remoteCount : state.selectedSongs.length;
-  const label = count === 1 ? "song" : "songs";
-  queueSummaryEl.textContent = `${count} ${label} in playlist`;
+  queueSummaryEl.textContent = chooseByCount(count, "queue.songInPlaylist", "queue.songsInPlaylist");
   queueEmptyEl.hidden = !(state.playlistCount === 0 && state.selectedSongs.length === 0);
   queueListEl.replaceChildren(...state.selectedSongs.map((song, index) => renderQueueItem(song, index)));
 }
@@ -569,11 +1061,11 @@ function renderQueueItem(song, index) {
 
   const title = document.createElement("span");
   title.className = "queue-title";
-  title.textContent = song.title;
+  title.textContent = song.title || t("queue.untitled");
 
   const singer = document.createElement("span");
   singer.className = "queue-singer";
-  singer.textContent = song.singer || "Unknown singer";
+  singer.textContent = song.singer || t("queue.unknownSinger");
 
   main.append(title, singer);
 
@@ -585,14 +1077,14 @@ function renderQueueItem(song, index) {
   next.type = "button";
   next.dataset.queueAction = "next";
   next.disabled = !song.rowId || state.queueBusy;
-  next.textContent = "Next";
+  setButtonContent(next, "arrowUp", t("queue.next"));
 
   const remove = document.createElement("button");
   remove.className = "small-button danger";
   remove.type = "button";
   remove.dataset.queueAction = "remove";
   remove.disabled = !song.rowId || state.queueBusy;
-  remove.textContent = "Remove";
+  setButtonContent(remove, "trash", t("queue.remove"));
 
   actions.append(next, remove);
   li.append(ordinal, main, actions);
@@ -600,14 +1092,14 @@ function renderQueueItem(song, index) {
 }
 
 async function promoteSelectedSong(rowId) {
-  await runQueueMutation("Pro2", rowId, "Moved next");
+  await runQueueMutation("Pro2", rowId, "status.movedNext");
 }
 
 async function removeSelectedSong(rowId) {
-  await runQueueMutation("Del1", rowId, "Removed");
+  await runQueueMutation("Del1", rowId, "status.removed");
 }
 
-async function runQueueMutation(cmd, rowId, successText) {
+async function runQueueMutation(cmd, rowId, successKey) {
   if (state.queueBusy) return;
 
   state.queueBusy = true;
@@ -615,9 +1107,9 @@ async function runQueueMutation(cmd, rowId, successText) {
 
   try {
     await sendCommand(cmd, rowId);
-    statusEl.textContent = successText;
+    setStatus(successKey);
   } catch (error) {
-    statusEl.textContent = `${successText} failed`;
+    setStatus("status.failed", { action: t(successKey) });
     console.error(error);
   } finally {
     state.queueBusy = false;
@@ -630,7 +1122,7 @@ async function randomizeSelectedSongs() {
 
   const candidates = state.selectedSongs.filter((song) => song.rowId);
   if (candidates.length < 2) {
-    statusEl.textContent = "Need at least two songs in playlist";
+    setStatus("status.needTwoSongs");
     return;
   }
 
@@ -642,13 +1134,16 @@ async function randomizeSelectedSongs() {
     const promoteOrder = [...shuffled].reverse();
 
     for (let index = 0; index < promoteOrder.length; index += 1) {
-      statusEl.textContent = `Randomizing ${index + 1}/${promoteOrder.length}`;
+      setStatus("status.randomizing", {
+        current: formatCount(index + 1),
+        total: formatCount(promoteOrder.length)
+      });
       await sendCommand("Pro2", promoteOrder[index].rowId);
     }
 
-    statusEl.textContent = "Randomized playlist";
+    setStatus("status.randomized");
   } catch (error) {
-    statusEl.textContent = "Randomize failed";
+    setStatus("status.randomizeFailed");
     console.error(error);
   } finally {
     state.queueBusy = false;
@@ -675,15 +1170,21 @@ async function queueSong(songId) {
   const currentCount = Number(current?.count || 0);
   const nextCount = currentCount + 1;
 
-  setQueueStatus(songId, "pending", "Sending", currentCount);
+  setQueueStatus(songId, "pending", currentCount);
 
   try {
     await sendCommand(ADD_COMMAND, song.id);
-    setQueueStatus(songId, "queued", queueMessage(nextCount), nextCount);
-    statusEl.textContent = `${queueMessage(nextCount)}: ${song.title}`;
+    setQueueStatus(songId, "queued", nextCount);
+    setStatus("status.queuedTitle", {
+      status: queueMessage(nextCount),
+      title: song.title
+    });
   } catch (error) {
-    setQueueStatus(songId, "error", failMessage(currentCount), currentCount);
-    statusEl.textContent = `Queue failed: ${song.title}`;
+    setQueueStatus(songId, "error", currentCount);
+    setStatus("status.queuedTitle", {
+      status: t("status.queueFailed"),
+      title: song.title
+    });
     console.error(error);
   } finally {
     await loadSelectedSongs(true);
@@ -707,8 +1208,8 @@ function isCommandSuccess(response, expectedCmd) {
   return response?.cmd === expectedCmd && (response.code === undefined || String(response.code) === "0");
 }
 
-function setQueueStatus(songId, status, message, count = 0) {
-  state.queueState.set(songId, { status, message, count });
+function setQueueStatus(songId, status, count = 0) {
+  state.queueState.set(songId, { status, count });
   renderVisibleSongs();
 }
 
@@ -725,12 +1226,29 @@ function queueButtonText(queueStatus) {
   }
 }
 
+function queueStatusMessage(queueStatus) {
+  switch (queueStatus?.status) {
+    case "pending":
+      return t("status.sending");
+    case "queued":
+      return queueMessage(queueStatus.count);
+    case "error":
+      return failMessage(queueStatus.count);
+    default:
+      return "";
+  }
+}
+
 function queueMessage(count) {
-  return count > 1 ? `Queued x${count}` : "Queued";
+  return count > 1
+    ? t("status.queuedCount", { count: formatCount(count) })
+    : t("status.queued");
 }
 
 function failMessage(count) {
-  return count > 0 ? `Failed; queued x${count}` : "Failed";
+  return count > 0
+    ? t("status.failedQueued", { count: formatCount(count) })
+    : t("status.queueFailed");
 }
 
 function jsonp(endpoint, params, timeoutMs = 7000) {
