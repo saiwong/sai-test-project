@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KTV Finder</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <h1>KTV Finder</h1>
+            <p id="status">Loading song index...</p>
+          </div>
+        </div>
+        <div class="library-count" aria-label="Song library size">
+          <span id="song-count">...</span>
+          <span>songs</span>
+        </div>
+      </header>
+
+      <section class="search-band" aria-label="Song search">
+        <div class="search-row">
+          <label class="sr-only" for="query">Search songs or singers</label>
+          <input id="query" type="search" autocomplete="off" spellcheck="false" placeholder="Song or singer" autofocus>
+          <button id="clear-search" class="icon-button" type="button" aria-label="Clear search" title="Clear search">x</button>
+        </div>
+
+        <div class="mode-row" aria-label="Search target">
+          <button class="mode-button is-active" type="button" data-mode="all">All</button>
+          <button class="mode-button" type="button" data-mode="title">Songs</button>
+          <button class="mode-button" type="button" data-mode="singer">Singers</button>
+        </div>
+      </section>
+
+      <section class="results-band" aria-live="polite" aria-busy="true">
+        <div class="result-meta">
+          <span id="result-summary">Preparing index</span>
+          <span id="elapsed"></span>
+        </div>
+        <ol id="results" class="results"></ol>
+        <div id="empty-state" class="empty-state" hidden>No matches</div>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
