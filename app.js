@@ -19,8 +19,10 @@ const queueEmptyEl = document.querySelector("#queue-empty");
 const refreshQueueButton = document.querySelector("#refresh-queue");
 const randomizeQueueButton = document.querySelector("#randomize-queue");
 
-const COMMAND_ENDPOINT = "https://your-song-server.example/demo/CommandServlet";
-const PLAYLIST_ENDPOINT = "https://your-song-server.example/demo/PlaylistServlet";
+const DEFAULT_SONG_SERVER_HOST = "";
+const SONG_SERVER_HOST = getSongServerHost();
+const COMMAND_ENDPOINT = `${SONG_SERVER_HOST}/demo/CommandServlet`;
+const PLAYLIST_ENDPOINT = `${SONG_SERVER_HOST}/demo/PlaylistServlet`;
 const ADD_COMMAND = "Add1";
 const COMMAND_LABELS = {
   Skip: "Skipped",
@@ -52,6 +54,22 @@ const state = {
 
 const worker = new Worker(`search-worker.js?v=${Date.now()}`);
 let jsonpSequence = 0;
+
+function getSongServerHost() {
+  const rawHost = new URLSearchParams(window.location.search).get("songServerHost");
+  if (!rawHost) return DEFAULT_SONG_SERVER_HOST;
+
+  try {
+    const parsed = new URL(rawHost);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("songServerHost must start with http:// or https://");
+    }
+    return parsed.origin;
+  } catch (error) {
+    console.warn(`Ignoring invalid songServerHost: ${rawHost}`, error);
+    return DEFAULT_SONG_SERVER_HOST;
+  }
+}
 
 worker.addEventListener("message", (event) => {
   const message = event.data;
