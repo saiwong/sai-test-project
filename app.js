@@ -23,6 +23,7 @@ const DEFAULT_SONG_SERVER_HOST = "";
 const SONG_SERVER_HOST = getSongServerHost();
 const COMMAND_ENDPOINT = `${SONG_SERVER_HOST}/demo/CommandServlet`;
 const PLAYLIST_ENDPOINT = `${SONG_SERVER_HOST}/demo/PlaylistServlet`;
+const SELECTED_SONGS_CACHE_KEY = `ktv-selected-songs:${SONG_SERVER_HOST}`;
 const ADD_COMMAND = "Add1";
 const COMMAND_LABELS = {
   Skip: "Skipped",
@@ -48,9 +49,14 @@ const state = {
   lastResults: [],
   visibleSongs: new Map(),
   queueState: new Map(),
-  selectedSongs: [],
-  queueBusy: false
+  selectedSongs: loadSelectedSongsCache(),
+  playlistCount: null,
+  queueBusy: false,
+  selectedRetryTimer: 0,
+  selectedRetryCount: 0
 };
+
+updatePlaylistCount(state.selectedSongs.length);
 
 const worker = new Worker(`search-worker.js?v=${Date.now()}`);
 let jsonpSequence = 0;
@@ -144,6 +150,7 @@ controlButtons.forEach((button) => {
 });
 
 refreshQueueButton.addEventListener("click", () => {
+  state.selectedRetryCount = 0;
   loadSelectedSongs(true);
 });
 
@@ -305,6 +312,7 @@ function setActiveView(view) {
   queueView.hidden = view !== "queue";
 
   if (view === "queue") {
+    state.selectedRetryCount = 0;
     loadSelectedSongs(true);
   } else {
     queryInput.focus();
@@ -339,14 +347,30 @@ async function loadSelectedSongs(fullList) {
       onSelectPage: fullList ? "true" : "false"
     }, 5000);
 
-    const count = Number(response.number || 0);
-    queueCountEl.textContent = Number.isFinite(count) ? String(count) : "0";
+    const responseCount = Number(response.number);
+    const hasResponseCount = Number.isFinite(responseCount);
 
-    if (fullList || response.songList !== undefined || count === 0) {
-      if (response.songList !== undefined || count === 0) {
-        state.selectedSongs = parseSelectedSongs(response.songList);
-      }
+    if (response.songList !== undefined) {
+      clearSelectedSongsRetry();
+      state.selectedRetryCount = 0;
+      state.selectedSongs = parseSelectedSongs(response.songList);
+      saveSelectedSongsCache(state.selectedSongs);
+      const count = hasResponseCount ? responseCount : state.selectedSongs.length;
+      updatePlaylistCount(count);
       renderSelectedSongs(count);
+    } else {
+      const count = hasResponseCount ? responseCount : state.selectedSongs.length;
+      updatePlaylistCount(count);
+      if (count === 0) {
+        clearSelectedSongsRetry();
+        state.selectedRetryCount = 0;
+        state.selectedSongs = [];
+        saveSelectedSongsCache(state.selectedSongs);
+        renderSelectedSongs(count);
+      } else if (fullList) {
+        renderPendingSelectedSongs(count);
+        scheduleSelectedSongsRetry();
+      }
     }
   } catch (error) {
     if (state.activeView === "queue") {
@@ -354,6 +378,75 @@ async function loadSelectedSongs(fullList) {
     }
     console.error(error);
   }
+}
+
+function renderPendingSelectedSongs(remoteCount) {
+  if (state.selectedSongs.length > 0 && state.selectedSongs.length === remoteCount) {
+    clearSelectedSongsRetry();
+    state.selectedRetryCount = 0;
+    renderSelectedSongs(remoteCount);
+    return;
+  }
+
+  const count = Number.isFinite(remoteCount) ? remoteCount : 0;
+  const label = count === 1 ? "song" : "songs";
+  queueSummaryEl.textContent = state.selectedRetryCount >= 6
+    ? `${count} selected ${label}; tap Refresh`
+    : `Loading ${count} selected ${label}...`;
+  queueEmptyEl.hidden = true;
+  queueListEl.replaceChildren();
+}
+
+function updatePlaylistCount(count) {
+  state.playlistCount = Number.isFinite(count) ? count : 0;
+  queueCountEl.textContent = String(state.playlistCount);
+}
+
+function loadSelectedSongsCache() {
+  try {
+    const raw = window.localStorage.getItem(SELECTED_SONGS_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.map((song, index) => ({
+      index,
+      rowId: String(song.rowId || ""),
+      songId: String(song.songId || ""),
+      title: String(song.title || "Untitled"),
+      singer: String(song.singer || "")
+    }));
+  } catch (error) {
+    console.warn("Unable to read selected song cache", error);
+    return [];
+  }
+}
+
+function saveSelectedSongsCache(songs) {
+  try {
+    if (songs.length === 0) {
+      window.localStorage.removeItem(SELECTED_SONGS_CACHE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(SELECTED_SONGS_CACHE_KEY, JSON.stringify(songs));
+  } catch (error) {
+    console.warn("Unable to save selected song cache", error);
+  }
+}
+
+function scheduleSelectedSongsRetry() {
+  if (state.selectedRetryTimer || state.activeView !== "queue" || state.selectedRetryCount >= 6) return;
+
+  state.selectedRetryCount += 1;
+  state.selectedRetryTimer = window.setTimeout(() => {
+    state.selectedRetryTimer = 0;
+    loadSelectedSongs(true);
+  }, 700);
+}
+
+function clearSelectedSongsRetry() {
+  window.clearTimeout(state.selectedRetryTimer);
+  state.selectedRetryTimer = 0;
 }
 
 function parseSelectedSongs(songList) {
@@ -380,7 +473,7 @@ function renderSelectedSongs(remoteCount = state.selectedSongs.length) {
   const count = Number.isFinite(remoteCount) ? remoteCount : state.selectedSongs.length;
   const label = count === 1 ? "song" : "songs";
   queueSummaryEl.textContent = `${count} selected ${label}`;
-  queueEmptyEl.hidden = state.selectedSongs.length !== 0;
+  queueEmptyEl.hidden = !(state.playlistCount === 0 && state.selectedSongs.length === 0);
   queueListEl.replaceChildren(...state.selectedSongs.map((song, index) => renderQueueItem(song, index)));
 }
 
