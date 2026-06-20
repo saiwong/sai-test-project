@@ -1,9 +1,14 @@
 # KTV Finder
 
 Static browser app for searching the scraped SoundKing song database.
+Traditional Chinese query characters are normalized to Simplified Chinese for
+matching against the generated song database.
 
 Click a result row to queue that song on the SoundKing server using `cmd=Add1`.
 Click the same row again to queue another copy of the same song.
+
+In Singer search mode, matching singers are shown first. Click a singer row to
+show that singer's full song list.
 
 The control panel sends the same playback commands as the original mobile app:
 `Skip`, `Play`, `Reset`, `Mute`, `MuOr`, `Music_down`, `Music_up`, `Tone_down`,

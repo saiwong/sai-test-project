@@ -4,10 +4,15 @@ const CJK_RE = /[\u3400-\u9fff]/;
 const TAG_RE = /\b(hd|mtv|live|diy|dj|dvd|mp3)\b/gi;
 
 let records = [];
+let singerGroups = [];
+let T2S_MAP = {};
 
 try {
+  importScripts(`data/t2s-map.js?v=${Date.now()}`);
   importScripts(`data/songs.js?v=${Date.now()}`);
+  T2S_MAP = self.KTV_T2S_MAP || {};
   records = (self.KTV_SONGS || KTV_SONGS).map(makeRecord);
+  singerGroups = buildSingerGroups(records);
   self.postMessage({
     type: "ready",
     count: records.length,
@@ -27,9 +32,10 @@ self.addEventListener("message", (event) => {
 
   const started = performance.now();
   const query = String(message.query || "").trim();
-  const limit = clamp(Number(message.limit) || 80, 10, 200);
+  const limit = clamp(Number(message.limit) || 80, 10, 500);
   const mode = message.mode || "all";
-  const results = search(query, mode, limit);
+  const singerFilter = String(message.singerFilter || "").trim();
+  const results = search(query, mode, limit, singerFilter);
   const elapsedMs = performance.now() - started;
 
   self.postMessage({
@@ -37,8 +43,12 @@ self.addEventListener("message", (event) => {
     requestId: message.requestId,
     query,
     mode,
+    normalizedQuery: results.normalizedQuery,
+    singerFilter: results.singerFilter,
     elapsedMs,
     totalMatches: results.totalMatches,
+    totalSingerMatches: results.totalSingerMatches,
+    singers: results.singers,
     results: results.items
   });
 });
@@ -47,6 +57,7 @@ function makeRecord(row, index) {
   const id = String(row.id || "");
   const title = String(row.title || "");
   const singer = String(row.singer || "");
+  const singerNames = splitSingers(singer);
   const titleNorm = normalize(title);
   const singerNorm = normalize(singer);
   const titleCompact = compact(titleNorm);
@@ -59,6 +70,7 @@ function makeRecord(row, index) {
     id,
     title,
     singer,
+    singerNames,
     titleNorm,
     singerNorm,
     titleCompact,
@@ -69,15 +81,91 @@ function makeRecord(row, index) {
   };
 }
 
-function search(rawQuery, mode, limit) {
+function buildSingerGroups(items) {
+  const groups = new Map();
+
+  for (const record of items) {
+    for (const name of record.singerNames) {
+      const norm = normalize(name);
+      const key = compact(norm);
+      if (!key) continue;
+
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          name,
+          norm,
+          compact: key,
+          count: 0,
+          firstIndex: record.index,
+          records: []
+        };
+        groups.set(key, group);
+      }
+
+      group.count += 1;
+      group.records.push(record);
+      group.firstIndex = Math.min(group.firstIndex, record.index);
+    }
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return a.firstIndex - b.firstIndex;
+  });
+}
+
+function findSingerGroup(query) {
+  let best = null;
+  let bestScore = 0;
+
+  for (const group of singerGroups) {
+    if (group.compact === query.compact) return group;
+
+    const score = scoreText(group.norm, group.compact, query, 1);
+    if (score > bestScore) {
+      best = group;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? best : null;
+}
+
+function search(rawQuery, mode, limit, singerFilter = "") {
+  if (singerFilter) {
+    return searchBySingerFilter(singerFilter, limit);
+  }
+
   if (!rawQuery) {
+    if (mode === "singer") {
+      const singers = singerGroups.slice(0, limit).map(publicSinger);
+      return {
+        normalizedQuery: "",
+        singerFilter: "",
+        totalMatches: 0,
+        totalSingerMatches: singerGroups.length,
+        singers,
+        items: []
+      };
+    }
+
     return {
+      normalizedQuery: "",
+      singerFilter: "",
       totalMatches: records.length,
+      totalSingerMatches: 0,
+      singers: [],
       items: records.slice(0, limit).map(publicSong)
     };
   }
 
   const query = makeQuery(rawQuery);
+  const singers = mode === "singer" ? searchSingers(query, Math.min(limit, 40)) : {
+    totalMatches: 0,
+    items: []
+  };
   const matches = [];
   let totalMatches = 0;
 
@@ -98,8 +186,53 @@ function search(rawQuery, mode, limit) {
   });
 
   return {
+    normalizedQuery: query.norm,
+    singerFilter: "",
     totalMatches,
+    totalSingerMatches: singers.totalMatches,
+    singers: singers.items,
     items: matches.slice(0, limit).map((item) => publicSong(item.record, item.score))
+  };
+}
+
+function searchBySingerFilter(rawSinger, limit) {
+  const query = makeQuery(rawSinger);
+  const group = findSingerGroup(query);
+  const items = group
+    ? group.records.slice(0, limit).map((record) => publicSong(record, 1000))
+    : [];
+
+  return {
+    normalizedQuery: query.norm,
+    singerFilter: group?.name || rawSinger,
+    totalMatches: group?.records.length || 0,
+    totalSingerMatches: 0,
+    singers: [],
+    items
+  };
+}
+
+function searchSingers(query, limit) {
+  const matches = [];
+  let totalMatches = 0;
+
+  for (const group of singerGroups) {
+    const score = scoreText(group.norm, group.compact, query, 1);
+    if (score <= 0) continue;
+
+    totalMatches += 1;
+    matches.push({ group, score });
+  }
+
+  matches.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.group.count !== a.group.count) return b.group.count - a.group.count;
+    return a.group.firstIndex - b.group.firstIndex;
+  });
+
+  return {
+    totalMatches,
+    items: matches.slice(0, limit).map((item) => publicSinger(item.group, item.score))
   };
 }
 
@@ -243,7 +376,7 @@ function makeQuery(raw) {
 }
 
 function normalize(value) {
-  return String(value || "")
+  return toSimplified(String(value || ""))
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[’‘]/g, "'")
@@ -255,8 +388,23 @@ function normalize(value) {
     .trim();
 }
 
+function toSimplified(value) {
+  let output = "";
+  for (const char of String(value || "")) {
+    output += T2S_MAP[char] || char;
+  }
+  return output;
+}
+
 function compact(value) {
   return String(value || "").replace(/\s+/g, "");
+}
+
+function splitSingers(value) {
+  return String(value || "")
+    .split(/[,，、/&+;；]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function extractTags(title) {
@@ -271,10 +419,20 @@ function extractTags(title) {
 
 function publicSong(record, score = 0) {
   return {
+    type: "song",
     id: record.id,
     title: record.title,
     singer: record.singer,
     tags: record.tags,
+    score: Math.round(score)
+  };
+}
+
+function publicSinger(group, score = 0) {
+  return {
+    type: "singer",
+    name: group.name,
+    count: group.count,
     score: Math.round(score)
   };
 }

@@ -44,9 +44,11 @@ const state = {
   activeView: "search",
   mode: "all",
   query: "",
+  singerFilter: "",
   pendingTimer: 0,
   requestId: 0,
   lastResults: [],
+  lastSingers: [],
   visibleSongs: new Map(),
   queueState: new Map(),
   selectedSongs: loadSelectedSongsCache(),
@@ -116,12 +118,14 @@ worker.addEventListener("error", () => {
 
 queryInput.addEventListener("input", () => {
   state.query = queryInput.value.trim();
+  state.singerFilter = "";
   queueSearch();
 });
 
 clearButton.addEventListener("click", () => {
   queryInput.value = "";
   state.query = "";
+  state.singerFilter = "";
   queryInput.focus();
   searchNow();
 });
@@ -132,6 +136,7 @@ modeButtons.forEach((button) => {
     if (mode === state.mode) return;
 
     state.mode = mode;
+    state.singerFilter = "";
     modeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     searchNow();
   });
@@ -175,6 +180,12 @@ queueListEl.addEventListener("click", (event) => {
 resultsEl.addEventListener("click", (event) => {
   const row = event.target.closest(".result-item");
   if (!row || !resultsEl.contains(row)) return;
+
+  if (row.classList.contains("singer-result")) {
+    selectSinger(row.dataset.singer);
+    return;
+  }
+
   queueSong(row.dataset.songId);
 });
 
@@ -185,6 +196,11 @@ resultsEl.addEventListener("keydown", (event) => {
   if (!row || !resultsEl.contains(row)) return;
 
   event.preventDefault();
+  if (row.classList.contains("singer-result")) {
+    selectSinger(row.dataset.singer);
+    return;
+  }
+
   queueSong(row.dataset.songId);
 });
 
@@ -197,9 +213,21 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.activeElement === queryInput && queryInput.value) {
     queryInput.value = "";
     state.query = "";
+    state.singerFilter = "";
     searchNow();
   }
 });
+
+function selectSinger(singer) {
+  if (!singer) return;
+
+  state.mode = "singer";
+  state.singerFilter = singer;
+  state.query = singer;
+  queryInput.value = singer;
+  modeButtons.forEach((item) => item.classList.toggle("is-active", item.dataset.mode === "singer"));
+  searchNow();
+}
 
 function queueSearch() {
   window.clearTimeout(state.pendingTimer);
@@ -215,20 +243,33 @@ function searchNow() {
     type: "search",
     requestId: state.requestId,
     query: state.query,
+    singerFilter: state.singerFilter,
     mode: state.mode,
-    limit: 80
+    limit: state.singerFilter ? 500 : 80
   });
 }
 
 function renderResults(message) {
   const query = message.query || "";
+  const highlightQuery = message.normalizedQuery || query;
   const total = message.totalMatches;
   const shown = message.results.length;
+  const singers = message.singers || [];
+  const totalSingers = Number(message.totalSingerMatches || 0);
   resultsBand.dataset.query = query;
   state.lastResults = message.results;
+  state.lastSingers = singers;
   state.visibleSongs = new Map(message.results.map((song) => [song.id, song]));
 
-  if (query) {
+  if (message.singerFilter) {
+    const label = total === 1 ? "song" : "songs";
+    resultSummaryEl.textContent = `${total.toLocaleString()} ${label} by ${message.singerFilter}`;
+  } else if (state.mode === "singer") {
+    const singerLabel = totalSingers === 1 ? "singer" : "singers";
+    resultSummaryEl.textContent = query
+      ? `${totalSingers.toLocaleString()} ${singerLabel}`
+      : `Showing ${singers.length.toLocaleString()} singers`;
+  } else if (query) {
     const label = total === 1 ? "match" : "matches";
     resultSummaryEl.textContent = `${total.toLocaleString()} ${label}`;
   } else {
@@ -236,12 +277,49 @@ function renderResults(message) {
   }
 
   elapsedEl.textContent = `${message.elapsedMs.toFixed(0)} ms`;
-  emptyStateEl.hidden = shown !== 0;
-  renderVisibleSongs(query);
+  emptyStateEl.hidden = shown + singers.length !== 0;
+  renderVisibleSongs(highlightQuery);
 }
 
 function renderVisibleSongs(query = state.query) {
-  resultsEl.replaceChildren(...state.lastResults.map((song) => renderSong(song, query)));
+  resultsEl.replaceChildren(
+    ...state.lastSingers.map((singer) => renderSinger(singer, query)),
+    ...state.lastResults.map((song) => renderSong(song, query))
+  );
+}
+
+function renderSinger(singer, query) {
+  const li = document.createElement("li");
+  li.className = "result-item singer-result";
+  li.dataset.singer = singer.name;
+  li.tabIndex = 0;
+  li.setAttribute("role", "button");
+  li.setAttribute("aria-label", `Show songs by ${singer.name}`);
+
+  const main = document.createElement("div");
+  main.className = "song-main";
+
+  const title = document.createElement("span");
+  title.className = "song-title";
+  title.append(...highlightText(singer.name, query));
+
+  const meta = document.createElement("span");
+  meta.className = "song-singer";
+  const label = singer.count === 1 ? "song" : "songs";
+  meta.textContent = `${singer.count.toLocaleString()} ${label}`;
+
+  main.append(title, meta);
+
+  const side = document.createElement("div");
+  side.className = "song-side";
+
+  const action = document.createElement("span");
+  action.className = "singer-action";
+  action.textContent = "View";
+
+  side.append(action);
+  li.append(main, side);
+  return li;
 }
 
 function renderSong(song, query) {

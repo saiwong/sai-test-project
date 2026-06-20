@@ -492,6 +492,11 @@ h1 {
   border-color: rgba(216, 95, 69, 0.72);
 }
 
+.singer-result {
+  border-color: rgba(14, 124, 117, 0.28);
+  background: #eef8f5;
+}
+
 .song-main {
   min-width: 0;
 }
@@ -544,6 +549,19 @@ h1 {
   font-size: 0.86rem;
   font-weight: 800;
   line-height: 1;
+}
+
+.singer-action {
+  min-width: 54px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(14, 124, 117, 0.34);
+  border-radius: 8px;
+  color: var(--teal-dark);
+  background: #fff;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .result-item[data-queue-state="pending"] .queue-button {
