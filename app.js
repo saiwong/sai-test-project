@@ -26,7 +26,16 @@ const COMMAND_ENDPOINT = `${SONG_SERVER_HOST}/demo/CommandServlet`;
 const PLAYLIST_ENDPOINT = `${SONG_SERVER_HOST}/demo/PlaylistServlet`;
 const SELECTED_SONGS_CACHE_KEY = `ktv-selected-songs:${SONG_SERVER_HOST}`;
 const LANGUAGE_CACHE_KEY = "ktv-interface-language";
+const ARTIST_RESOLVER_CACHE_KEY = "ktv-artist-resolver-cache:v1";
+const ARTIST_RESOLVER_DEBOUNCE_MS = 340;
+const ARTIST_RESOLVER_TIMEOUT_MS = 4500;
+const ARTIST_RESOLVER_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ARTIST_RESOLVER_MAX_CACHE_ENTRIES = 180;
+const ARTIST_RESOLVER_MAX_ALIASES = 8;
 const ADD_COMMAND = "Add1";
+const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+const LATIN_TEXT_RE = /[a-z]/i;
+const MUSIC_ARTIST_TEXT_RE = /\b(singer|musician|vocalist|rapper|composer|songwriter|band|duo|group|cantopop|mandopop|c-pop|pop|rock|record producer|music artist)\b|歌手|音樂|音乐|樂隊|乐队|樂團|乐团|组合|組合|演唱|作曲|作词|作詞/i;
 const COMMAND_LABEL_KEYS = {
   Skip: "command.skip",
   Play: "command.playPause",
@@ -322,6 +331,7 @@ const state = {
   statusKey: "status.loadingIndex",
   statusValues: {},
   pendingTimer: 0,
+  artistResolverTimer: 0,
   requestId: 0,
   lastResults: [],
   lastSingers: [],
@@ -332,7 +342,8 @@ const state = {
   playlistCount: null,
   queueBusy: false,
   selectedRetryTimer: 0,
-  selectedRetryCount: 0
+  selectedRetryCount: 0,
+  artistResolverCache: loadArtistResolverCache()
 };
 
 updatePlaylistCount(state.selectedSongs.length);
@@ -729,21 +740,337 @@ function queueSearch() {
 function searchNow() {
   if (!state.ready) return;
 
+  window.clearTimeout(state.artistResolverTimer);
   state.requestId += 1;
+  const requestId = state.requestId;
+  const shouldResolveArtist = shouldResolveArtistQuery(state.query, state.mode, state.singerFilter);
+  const cachedArtistAliases = shouldResolveArtist ? getCachedArtistAliases(state.query) : [];
+
   resultsBand.setAttribute("aria-busy", "true");
+  postSearchRequest(requestId, state.query, state.singerFilter, state.mode, cachedArtistAliases || []);
+
+  if (shouldResolveArtist && cachedArtistAliases === undefined) {
+    queueArtistResolution(state.query, state.mode, requestId);
+  }
+}
+
+function postSearchRequest(requestId, query, singerFilter, mode, artistAliases = []) {
   worker.postMessage({
     type: "search",
-    requestId: state.requestId,
-    query: state.query,
-    singerFilter: state.singerFilter,
-    mode: state.mode,
-    limit: state.singerFilter ? 500 : 80
+    requestId,
+    query,
+    singerFilter,
+    mode,
+    artistAliases,
+    limit: singerFilter ? 500 : 80
   });
+}
+
+function shouldResolveArtistQuery(query, mode, singerFilter) {
+  const raw = String(query || "").trim();
+  if (singerFilter || mode === "title") return false;
+  if (raw.length < 3 || raw.length > 80) return false;
+  if (!LATIN_TEXT_RE.test(raw) || CJK_TEXT_RE.test(raw)) return false;
+
+  const tokens = raw.toLowerCase().split(/[\s._'’`-]+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 5) return false;
+
+  return raw.replace(/[^a-z]/gi, "").length >= 3;
+}
+
+function queueArtistResolution(query, mode, requestId) {
+  state.artistResolverTimer = window.setTimeout(() => {
+    state.artistResolverTimer = 0;
+    resolveArtistForSearch(query, mode, requestId);
+  }, ARTIST_RESOLVER_DEBOUNCE_MS);
+}
+
+async function resolveArtistForSearch(query, mode, requestId) {
+  if (!isCurrentArtistResolution(query, mode, requestId)) return;
+
+  try {
+    const aliases = await resolveArtistAliases(query);
+    setCachedArtistAliases(query, aliases);
+
+    if (!aliases.length || !isCurrentArtistResolution(query, mode, requestId)) return;
+
+    postSearchRequest(requestId, query, "", mode, aliases);
+  } catch (error) {
+    console.warn("Artist resolver failed", error);
+  }
+}
+
+function isCurrentArtistResolution(query, mode, requestId) {
+  return requestId === state.requestId &&
+    query === state.query &&
+    mode === state.mode &&
+    !state.singerFilter &&
+    shouldResolveArtistQuery(query, mode, state.singerFilter);
+}
+
+function getCachedArtistAliases(query) {
+  const key = artistResolverCacheKey(query);
+  if (!key) return [];
+
+  const cached = state.artistResolverCache[key];
+  if (!cached) return undefined;
+
+  const savedAt = Number(cached.savedAt || 0);
+  if (!savedAt || Date.now() - savedAt > ARTIST_RESOLVER_CACHE_TTL_MS) {
+    delete state.artistResolverCache[key];
+    saveArtistResolverCache();
+    return undefined;
+  }
+
+  return normalizeArtistAliasList(cached.aliases);
+}
+
+function setCachedArtistAliases(query, aliases) {
+  const key = artistResolverCacheKey(query);
+  if (!key) return;
+
+  state.artistResolverCache[key] = {
+    aliases: normalizeArtistAliasList(aliases),
+    savedAt: Date.now()
+  };
+  pruneArtistResolverCache();
+  saveArtistResolverCache();
+}
+
+function loadArtistResolverCache() {
+  try {
+    const raw = window.localStorage.getItem(ARTIST_RESOLVER_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.warn("Unable to read artist resolver cache", error);
+    return {};
+  }
+}
+
+function saveArtistResolverCache() {
+  try {
+    window.localStorage.setItem(ARTIST_RESOLVER_CACHE_KEY, JSON.stringify(state.artistResolverCache));
+  } catch (error) {
+    console.warn("Unable to save artist resolver cache", error);
+  }
+}
+
+function pruneArtistResolverCache() {
+  const entries = Object.entries(state.artistResolverCache);
+  if (entries.length <= ARTIST_RESOLVER_MAX_CACHE_ENTRIES) return;
+
+  entries
+    .sort((a, b) => Number(a[1]?.savedAt || 0) - Number(b[1]?.savedAt || 0))
+    .slice(0, entries.length - ARTIST_RESOLVER_MAX_CACHE_ENTRIES)
+    .forEach(([key]) => {
+      delete state.artistResolverCache[key];
+    });
+}
+
+function artistResolverCacheKey(query) {
+  return String(query || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w]+/g, " ")
+    .trim();
+}
+
+async function resolveArtistAliases(query) {
+  const wikidataAliases = await resolveArtistAliasesFromWikidataSearch(query).catch((error) => {
+    console.warn("Wikidata artist lookup failed", error);
+    return [];
+  });
+
+  if (wikidataAliases.length) return wikidataAliases;
+
+  return resolveArtistAliasesFromWikipedia(query).catch((error) => {
+    console.warn("Wikipedia artist lookup failed", error);
+    return [];
+  });
+}
+
+async function resolveArtistAliasesFromWikidataSearch(query) {
+  const data = await fetchJson(mediaWikiUrl("https://www.wikidata.org/w/api.php", {
+    action: "wbsearchentities",
+    search: query,
+    language: "en",
+    uselang: "zh-hans",
+    type: "item",
+    limit: "6",
+    format: "json",
+    origin: "*"
+  }));
+  const searchItems = Array.isArray(data.search) ? data.search : [];
+  const ids = searchItems.map((item) => item.id).filter(isWikidataId);
+  const contextById = new Map(searchItems.map((item) => [item.id, item]));
+
+  return fetchWikidataAliasesForIds(ids, contextById);
+}
+
+async function resolveArtistAliasesFromWikipedia(query) {
+  const data = await fetchJson(mediaWikiUrl("https://en.wikipedia.org/w/api.php", {
+    action: "query",
+    generator: "search",
+    gsrsearch: query,
+    gsrlimit: "5",
+    prop: "pageprops",
+    ppprop: "wikibase_item",
+    format: "json",
+    origin: "*"
+  }));
+  const pages = Object.values(data.query?.pages || {});
+  const ids = pages.map((page) => page.pageprops?.wikibase_item).filter(isWikidataId);
+  const contextById = new Map(
+    pages
+      .filter((page) => isWikidataId(page.pageprops?.wikibase_item))
+      .map((page) => [page.pageprops.wikibase_item, {
+        title: page.title,
+        description: page.title
+      }])
+  );
+
+  return fetchWikidataAliasesForIds(ids, contextById);
+}
+
+async function fetchWikidataAliasesForIds(ids, contextById = new Map()) {
+  const uniqueIds = [...new Set(ids)].slice(0, 8);
+  if (!uniqueIds.length) return [];
+
+  const data = await fetchJson(mediaWikiUrl("https://www.wikidata.org/w/api.php", {
+    action: "wbgetentities",
+    ids: uniqueIds.join("|"),
+    props: "labels|aliases|descriptions",
+    languages: "zh-hans|zh-cn|zh-sg|zh|zh-hant|zh-tw|zh-hk|en",
+    languagefallback: "1",
+    format: "json",
+    origin: "*"
+  }));
+  const aliases = [];
+
+  for (const id of uniqueIds) {
+    const entity = data.entities?.[id];
+    if (!entity || entity.missing !== undefined) continue;
+    if (!isLikelyMusicArtist(contextById.get(id), entity)) continue;
+
+    aliases.push(...collectWikidataEntityAliases(entity));
+  }
+
+  return normalizeArtistAliasList(aliases);
+}
+
+function collectWikidataEntityAliases(entity) {
+  const values = [];
+  const languageOrder = ["zh-hans", "zh-cn", "zh-sg", "zh", "zh-hant", "zh-tw", "zh-hk"];
+
+  for (const language of languageOrder) {
+    const label = getEntityTextValue(entity.labels?.[language]);
+    if (label) values.push(label);
+  }
+
+  for (const language of languageOrder) {
+    const aliases = entity.aliases?.[language];
+    if (!Array.isArray(aliases)) continue;
+    aliases.forEach((alias) => {
+      const value = getEntityTextValue(alias);
+      if (value) values.push(value);
+    });
+  }
+
+  return values;
+}
+
+function isLikelyMusicArtist(context, entity) {
+  const descriptions = Object.values(entity.descriptions || {})
+    .map(getEntityTextValue)
+    .filter(Boolean);
+  const text = [
+    context?.title,
+    context?.label,
+    context?.description,
+    ...descriptions
+  ].filter(Boolean).join(" ");
+
+  return MUSIC_ARTIST_TEXT_RE.test(text);
+}
+
+function getEntityTextValue(entry) {
+  return String(entry?.value || "").trim();
+}
+
+function normalizeArtistAliasList(values) {
+  const aliases = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(values) ? values : []) {
+    const alias = normalizeArtistAlias(value);
+    const key = alias.toLowerCase().replace(/\s+/g, "");
+    if (!isUsefulArtistAlias(alias) || seen.has(key)) continue;
+
+    seen.add(key);
+    aliases.push(alias);
+    if (aliases.length >= ARTIST_RESOLVER_MAX_ALIASES) break;
+  }
+
+  return aliases;
+}
+
+function normalizeArtistAlias(value) {
+  return String(value || "")
+    .replace(/\s*\([^)]*\)\s*$/g, "")
+    .replace(/\s*（[^）]*）\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isUsefulArtistAlias(value) {
+  const alias = String(value || "");
+  return alias.length >= 2 &&
+    alias.length <= 28 &&
+    CJK_TEXT_RE.test(alias) &&
+    !/[《》:：]/.test(alias);
+}
+
+function isWikidataId(value) {
+  return /^Q\d+$/.test(String(value || ""));
+}
+
+function mediaWikiUrl(endpoint, params) {
+  const url = new URL(endpoint);
+  Object.entries(params).forEach(([key, value]) => {
+    url.searchParams.set(key, value);
+  });
+  return url;
+}
+
+async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url.toString(), {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return response.json();
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function renderResults(message) {
   const query = message.query || "";
   const highlightQuery = message.normalizedQuery || query;
+  const artistAliases = message.artistAliases || [];
+  const highlightQueries = [highlightQuery, ...artistAliases].filter(Boolean);
   const total = message.totalMatches;
   const shown = message.results.length;
   const singers = message.singers || [];
@@ -768,9 +1095,10 @@ function renderResults(message) {
     resultSummaryEl.textContent = t("result.showingSongs", { count: formatCount(shown) });
   }
 
+  resultSummaryEl.title = artistAliases.length ? artistAliases.join(", ") : "";
   elapsedEl.textContent = `${message.elapsedMs.toFixed(0)} ms`;
   emptyStateEl.hidden = shown + singers.length !== 0;
-  renderVisibleSongs(highlightQuery);
+  renderVisibleSongs(highlightQueries);
 }
 
 function renderVisibleSongs(query = state.query) {
@@ -1300,17 +1628,25 @@ function jsonp(endpoint, params, timeoutMs = 7000) {
 
 function highlightText(value, query) {
   const text = String(value || "");
-  const compactQuery = query.trim();
-  if (compactQuery.length < 2) return [document.createTextNode(text)];
+  const queries = (Array.isArray(query) ? query : [query])
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  if (!queries.length) return [document.createTextNode(text)];
 
   const lowerText = text.toLowerCase();
-  const lowerQuery = compactQuery.toLowerCase();
-  const index = lowerText.indexOf(lowerQuery);
-  if (index < 0) return [document.createTextNode(text)];
 
-  const before = document.createTextNode(text.slice(0, index));
-  const mark = document.createElement("mark");
-  mark.textContent = text.slice(index, index + compactQuery.length);
-  const after = document.createTextNode(text.slice(index + compactQuery.length));
-  return [before, mark, after];
+  for (const compactQuery of queries) {
+    const lowerQuery = compactQuery.toLowerCase();
+    const index = lowerText.indexOf(lowerQuery);
+    if (index < 0) continue;
+
+    const before = document.createTextNode(text.slice(0, index));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(index, index + compactQuery.length);
+    const after = document.createTextNode(text.slice(index + compactQuery.length));
+    return [before, mark, after];
+  }
+
+  return [document.createTextNode(text)];
 }

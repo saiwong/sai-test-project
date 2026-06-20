@@ -35,7 +35,8 @@ self.addEventListener("message", (event) => {
   const limit = clamp(Number(message.limit) || 80, 10, 500);
   const mode = message.mode || "all";
   const singerFilter = String(message.singerFilter || "").trim();
-  const results = search(query, mode, limit, singerFilter);
+  const artistAliases = normalizeAliasList(message.artistAliases);
+  const results = search(query, mode, limit, singerFilter, artistAliases);
   const elapsedMs = performance.now() - started;
 
   self.postMessage({
@@ -48,6 +49,7 @@ self.addEventListener("message", (event) => {
     elapsedMs,
     totalMatches: results.totalMatches,
     totalSingerMatches: results.totalSingerMatches,
+    artistAliases: results.artistAliases,
     singers: results.singers,
     results: results.items
   });
@@ -133,7 +135,7 @@ function findSingerGroup(query) {
   return bestScore > 0 ? best : null;
 }
 
-function search(rawQuery, mode, limit, singerFilter = "") {
+function search(rawQuery, mode, limit, singerFilter = "", artistAliases = []) {
   if (singerFilter) {
     return searchBySingerFilter(singerFilter, limit);
   }
@@ -144,6 +146,7 @@ function search(rawQuery, mode, limit, singerFilter = "") {
       return {
         normalizedQuery: "",
         singerFilter: "",
+        artistAliases: [],
         totalMatches: 0,
         totalSingerMatches: singerGroups.length,
         singers,
@@ -154,6 +157,7 @@ function search(rawQuery, mode, limit, singerFilter = "") {
     return {
       normalizedQuery: "",
       singerFilter: "",
+      artistAliases: [],
       totalMatches: records.length,
       totalSingerMatches: 0,
       singers: [],
@@ -161,8 +165,10 @@ function search(rawQuery, mode, limit, singerFilter = "") {
     };
   }
 
-  const query = makeQuery(rawQuery);
-  const singers = mode === "singer" ? searchSingers(query, Math.min(limit, 40)) : {
+  const queries = makeQueryVariants(rawQuery, artistAliases);
+  const query = queries[0] || makeQuery(rawQuery);
+  const shouldIncludeSingers = mode === "singer" || (mode === "all" && artistAliases.length > 0);
+  const singers = shouldIncludeSingers ? searchSingers(queries, Math.min(limit, 40)) : {
     totalMatches: 0,
     items: []
   };
@@ -171,7 +177,7 @@ function search(rawQuery, mode, limit, singerFilter = "") {
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
-    const score = scoreRecord(record, query, mode);
+    const score = scoreRecord(record, queries, mode);
     if (score <= 0) continue;
 
     totalMatches += 1;
@@ -188,6 +194,7 @@ function search(rawQuery, mode, limit, singerFilter = "") {
   return {
     normalizedQuery: query.norm,
     singerFilter: "",
+    artistAliases,
     totalMatches,
     totalSingerMatches: singers.totalMatches,
     singers: singers.items,
@@ -205,6 +212,7 @@ function searchBySingerFilter(rawSinger, limit) {
   return {
     normalizedQuery: query.norm,
     singerFilter: group?.name || rawSinger,
+    artistAliases: [],
     totalMatches: group?.records.length || 0,
     totalSingerMatches: 0,
     singers: [],
@@ -212,12 +220,12 @@ function searchBySingerFilter(rawSinger, limit) {
   };
 }
 
-function searchSingers(query, limit) {
+function searchSingers(queries, limit) {
   const matches = [];
   let totalMatches = 0;
 
   for (const group of singerGroups) {
-    const score = scoreText(group.norm, group.compact, query, 1);
+    const score = scoreSingerGroup(group, queries);
     if (score <= 0) continue;
 
     totalMatches += 1;
@@ -236,19 +244,31 @@ function searchSingers(query, limit) {
   };
 }
 
-function scoreRecord(record, query, mode) {
+function scoreSingerGroup(group, queries) {
   let best = 0;
 
-  if (mode === "all" || mode === "title") {
-    best = Math.max(best, scoreText(record.titleNorm, record.titleCompact, query, 1));
+  for (const query of queries) {
+    best = Math.max(best, scoreText(group.norm, group.compact, query, 1));
   }
 
-  if (mode === "all" || mode === "singer") {
-    best = Math.max(best, scoreText(record.singerNorm, record.singerCompact, query, 0.94));
-  }
+  return best;
+}
 
-  if (mode === "all") {
-    best = Math.max(best, scoreText(record.haystack, record.haystackCompact, query, 0.7));
+function scoreRecord(record, queries, mode) {
+  let best = 0;
+
+  for (const query of queries) {
+    if (mode === "all" || mode === "title") {
+      best = Math.max(best, scoreText(record.titleNorm, record.titleCompact, query, 1));
+    }
+
+    if (mode === "all" || mode === "singer") {
+      best = Math.max(best, scoreText(record.singerNorm, record.singerCompact, query, 0.94));
+    }
+
+    if (mode === "all") {
+      best = Math.max(best, scoreText(record.haystack, record.haystackCompact, query, 0.7));
+    }
   }
 
   return best;
@@ -275,12 +295,12 @@ function scoreText(textNorm, textCompact, query, weight) {
     score = Math.max(score, tokenScore);
   }
 
-  if (query.hasCjk) {
+  if (!query.strict && query.hasCjk) {
     const cjkScore = scoreCjk(textCompact, query.chars);
     score = Math.max(score, cjkScore);
   }
 
-  if (query.compact.length >= 3) {
+  if (!query.strict && query.compact.length >= 3) {
     const fuzzy = subsequenceScore(query.compact, textCompact);
     score = Math.max(score, fuzzy);
   }
@@ -362,7 +382,39 @@ function subsequenceScore(needle, haystack) {
   return Math.max(0, base - gapPenalty);
 }
 
-function makeQuery(raw) {
+function makeQueryVariants(rawQuery, artistAliases = []) {
+  const variants = [];
+  const seen = new Set();
+
+  for (const [index, raw] of [rawQuery, ...artistAliases].entries()) {
+    const query = makeQuery(raw, { strict: index > 0 });
+    if (!query.compact || seen.has(query.compact)) continue;
+
+    seen.add(query.compact);
+    variants.push(query);
+  }
+
+  return variants;
+}
+
+function normalizeAliasList(values) {
+  const aliases = [];
+  const seen = new Set();
+
+  for (const value of Array.isArray(values) ? values : []) {
+    const raw = String(value || "").trim();
+    const query = makeQuery(raw);
+    if (!raw || !query.compact || seen.has(query.compact)) continue;
+
+    seen.add(query.compact);
+    aliases.push(raw);
+    if (aliases.length >= 8) break;
+  }
+
+  return aliases;
+}
+
+function makeQuery(raw, options = {}) {
   const norm = normalize(raw);
   const compactValue = compact(norm);
   return {
@@ -371,7 +423,8 @@ function makeQuery(raw) {
     compact: compactValue,
     tokens: norm.split(" ").filter(Boolean),
     chars: [...compactValue],
-    hasCjk: CJK_RE.test(raw)
+    hasCjk: CJK_RE.test(raw),
+    strict: Boolean(options.strict)
   };
 }
 

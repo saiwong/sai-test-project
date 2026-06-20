@@ -10,6 +10,10 @@ Click the same row again to queue another copy of the same song.
 In Singer search mode, matching singers are shown first. Click a singer row to
 show that singer's full song list.
 
+For Latin-letter artist searches such as `Sandy Lam`, the app can resolve public
+Wikidata/Wikipedia Chinese labels at query time and use those names as extra
+local search aliases. Resolved aliases are cached in the browser for 30 days.
+
 The control panel sends the same playback commands as the original mobile app:
 `Skip`, `Play`, `Reset`, `Mute`, `MuOr`, `Music_down`, `Music_up`, `Tone_down`,
 and `Tone_up`.
