@@ -307,6 +307,7 @@ async function sendRemoteCommand(cmd, cmdValue, button) {
     statusEl.textContent = `${label} failed`;
     console.error(error);
   } finally {
+    await loadSelectedSongs(true);
     button?.classList.remove("is-busy");
     if (button) button.disabled = false;
   }
@@ -491,11 +492,12 @@ async function queueSong(songId) {
     await sendCommand(ADD_COMMAND, song.id);
     setQueueStatus(songId, "queued", queueMessage(nextCount), nextCount);
     statusEl.textContent = `${queueMessage(nextCount)}: ${song.title}`;
-    loadSelectedSongs(false);
   } catch (error) {
     setQueueStatus(songId, "error", failMessage(currentCount), currentCount);
     statusEl.textContent = `Queue failed: ${song.title}`;
     console.error(error);
+  } finally {
+    await loadSelectedSongs(true);
   }
 }
 

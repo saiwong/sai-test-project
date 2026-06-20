@@ -292,9 +292,15 @@ h1 {
 }
 
 .view-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 40;
   display: flex;
   gap: 8px;
   margin-top: 0;
+  background: rgba(246, 247, 245, 0.94);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(217, 223, 220, 0.72);
 }
 
 .view-tab {
@@ -340,7 +346,13 @@ h1 {
 }
 
 .search-band {
+  position: sticky;
+  top: 38px;
+  z-index: 35;
   padding: 8px 0 10px;
+  background: rgba(246, 247, 245, 0.92);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(217, 223, 220, 0.72);
 }
 
 .search-row {
