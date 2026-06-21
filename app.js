@@ -32,8 +32,6 @@ const ARTIST_RESOLVER_DEBOUNCE_MS = 250;
 const ARTIST_RESOLVER_TIMEOUT_MS = 4500;
 const ARTIST_RESOLVER_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const ARTIST_RESOLVER_MISS_CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
-const ARTIST_RESOLVER_ERROR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const ARTIST_RESOLVER_RATE_LIMIT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const ARTIST_RESOLVER_MAX_CACHE_ENTRIES = 3000;
 const ARTIST_RESOLVER_MAX_ALIASES = 8;
 const SINGER_IMAGE_TIMEOUT_MS = 5200;
@@ -846,7 +844,7 @@ async function resolveArtistForSearch(query, mode, requestId) {
 
     postSearchRequest(requestId, query, "", mode, aliases);
   } catch (error) {
-    setCachedArtistAliases(query, [], isWikiRateLimitError(error) ? "rate_limited" : "error");
+    removeCachedArtistAliases(query);
     console.warn("Artist resolver failed", error);
   } finally {
     state.artistResolverBusy = false;
@@ -873,6 +871,18 @@ function getCachedArtistAliases(query) {
   const cached = state.artistResolverCache[key];
   if (!cached) return undefined;
 
+  const aliases = normalizeArtistAliasList(cached.aliases);
+  const status = cached.status || (aliases.length ? "hit" : "");
+  if (
+    isTemporaryArtistResolverStatus(status) ||
+    (!status && !aliases.length) ||
+    (status === "hit" && !aliases.length)
+  ) {
+    delete state.artistResolverCache[key];
+    saveArtistResolverCache();
+    return undefined;
+  }
+
   const savedAt = Number(cached.savedAt || 0);
   const ttl = artistResolverCacheTtl(cached);
   if (!savedAt || Date.now() - savedAt > ttl) {
@@ -881,17 +891,13 @@ function getCachedArtistAliases(query) {
     return undefined;
   }
 
-  return normalizeArtistAliasList(cached.aliases);
+  return status === "missing" ? [] : aliases;
 }
 
 function artistResolverCacheTtl(entry) {
   switch (entry?.status) {
     case "missing":
       return ARTIST_RESOLVER_MISS_CACHE_TTL_MS;
-    case "rate_limited":
-      return ARTIST_RESOLVER_RATE_LIMIT_CACHE_TTL_MS;
-    case "error":
-      return ARTIST_RESOLVER_ERROR_CACHE_TTL_MS;
     default:
       return ARTIST_RESOLVER_CACHE_TTL_MS;
   }
@@ -902,12 +908,26 @@ function setCachedArtistAliases(query, aliases, status) {
   if (!key) return;
 
   const normalizedAliases = normalizeArtistAliasList(aliases);
+  const resolvedStatus = status || (normalizedAliases.length ? "hit" : "missing");
+  if (!isCacheableArtistResolverStatus(resolvedStatus) || (resolvedStatus === "hit" && !normalizedAliases.length)) {
+    removeCachedArtistAliases(query);
+    return;
+  }
+
   state.artistResolverCache[key] = {
     aliases: normalizedAliases,
-    status: status || (normalizedAliases.length ? "hit" : "missing"),
+    status: resolvedStatus,
     savedAt: Date.now()
   };
   pruneArtistResolverCache();
+  saveArtistResolverCache();
+}
+
+function removeCachedArtistAliases(query) {
+  const key = artistResolverCacheKey(query);
+  if (!key || !state.artistResolverCache[key]) return;
+
+  delete state.artistResolverCache[key];
   saveArtistResolverCache();
 }
 
@@ -915,11 +935,69 @@ function loadArtistResolverCache() {
   try {
     const raw = window.localStorage.getItem(ARTIST_RESOLVER_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    const sanitized = sanitizeArtistResolverCache(parsed);
+    if (sanitized.changed) {
+      window.localStorage.setItem(ARTIST_RESOLVER_CACHE_KEY, JSON.stringify(sanitized.cache));
+    }
+
+    return sanitized.cache;
   } catch (error) {
     console.warn("Unable to read artist resolver cache", error);
     return {};
   }
+}
+
+function sanitizeArtistResolverCache(cache) {
+  let changed = false;
+  const sanitized = {};
+
+  Object.entries(cache).forEach(([key, entry]) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      changed = true;
+      return;
+    }
+
+    const rawAliases = Array.isArray(entry.aliases) ? entry.aliases.map((alias) => String(alias || "")) : [];
+    const aliases = normalizeArtistAliasList(entry.aliases);
+    const status = entry.status || (aliases.length ? "hit" : "");
+    if (
+      isTemporaryArtistResolverStatus(status) ||
+      (!status && !aliases.length) ||
+      (status === "hit" && !aliases.length)
+    ) {
+      changed = true;
+      return;
+    }
+
+    const nextStatus = status || "hit";
+    const nextEntry = {
+      ...entry,
+      aliases,
+      status: nextStatus
+    };
+    sanitized[key] = nextEntry;
+    if (
+      aliases.join("\u0000") !== rawAliases.join("\u0000") ||
+      nextStatus !== entry.status
+    ) {
+      changed = true;
+    }
+  });
+
+  return {
+    cache: sanitized,
+    changed
+  };
+}
+
+function isTemporaryArtistResolverStatus(status) {
+  return status === "rate_limited" || status === "error";
+}
+
+function isCacheableArtistResolverStatus(status) {
+  return status === "hit" || status === "missing";
 }
 
 function saveArtistResolverCache() {
