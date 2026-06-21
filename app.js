@@ -28,17 +28,28 @@ const SELECTED_SONGS_CACHE_KEY = SONG_SERVER_HOST ? `ktv-selected-songs:${SONG_S
 const LANGUAGE_CACHE_KEY = "ktv-interface-language";
 const ARTIST_RESOLVER_CACHE_KEY = "ktv-artist-resolver-cache:v1";
 const SINGER_IMAGE_CACHE_KEY = "ktv-singer-image-cache:v1";
-const ARTIST_RESOLVER_DEBOUNCE_MS = 340;
+const ARTIST_RESOLVER_DEBOUNCE_MS = 250;
 const ARTIST_RESOLVER_TIMEOUT_MS = 4500;
-const ARTIST_RESOLVER_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const ARTIST_RESOLVER_MAX_CACHE_ENTRIES = 180;
+const ARTIST_RESOLVER_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const ARTIST_RESOLVER_MISS_CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+const ARTIST_RESOLVER_ERROR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const ARTIST_RESOLVER_RATE_LIMIT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const ARTIST_RESOLVER_MAX_CACHE_ENTRIES = 3000;
 const ARTIST_RESOLVER_MAX_ALIASES = 8;
 const SINGER_IMAGE_TIMEOUT_MS = 5200;
 const SINGER_IMAGE_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
-const SINGER_IMAGE_MISS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SINGER_IMAGE_MISS_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SINGER_IMAGE_ERROR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SINGER_IMAGE_RATE_LIMIT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SINGER_IMAGE_MAX_CACHE_ENTRIES = 500;
-const SINGER_IMAGE_MAX_LOOKUPS_PER_RENDER = 24;
-const SINGER_IMAGE_LOOKUP_CONCURRENCY = 3;
+const SINGER_IMAGE_LOOKUP_DEBOUNCE_MS = 1100;
+const SINGER_IMAGE_SCROLL_DEBOUNCE_MS = 900;
+const SINGER_IMAGE_VISIBLE_OVERSCAN_PX = 180;
+const SINGER_IMAGE_MAX_LOOKUPS_PER_BATCH = 2;
+const SINGER_IMAGE_LOOKUP_CONCURRENCY = 1;
+const SINGER_IMAGE_MAX_CANDIDATES = 2;
+const WIKI_REQUEST_MIN_INTERVAL_MS = 1300;
+const WIKI_RATE_LIMIT_BACKOFF_MS = 60 * 1000;
 const WIKIMEDIA_API_USER_AGENT = "KTVFinder/1.0 (https://github.com/saiwong/sai-test-project)";
 const ADD_COMMAND = "Add1";
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
@@ -342,6 +353,7 @@ const state = {
   statusValues: {},
   pendingTimer: 0,
   artistResolverTimer: 0,
+  artistResolverBusy: false,
   requestId: 0,
   lastResults: [],
   lastSingers: [],
@@ -356,6 +368,7 @@ const state = {
   artistResolverCache: loadArtistResolverCache(),
   singerImageCache: loadSingerImageCache(),
   singerImageInflight: new Set(),
+  singerImageLookupTimer: 0,
   singerImageRenderTimer: 0
 };
 
@@ -364,6 +377,15 @@ applyLanguage();
 
 const worker = new Worker(`search-worker.js?v=${Date.now()}`);
 let jsonpSequence = 0;
+const wikiRequestQueues = {
+  high: [],
+  low: []
+};
+let wikiRequestActive = false;
+let wikiRequestTimer = 0;
+let activeWikiRequest = null;
+let wikiNextRequestAt = 0;
+let wikiBackoffUntil = 0;
 
 function getSongServerHost() {
   const rawHost = new URLSearchParams(window.location.search).get("songServerHost");
@@ -683,6 +705,10 @@ randomizeQueueButton.addEventListener("click", () => {
   randomizeSelectedSongs();
 });
 
+window.addEventListener("scroll", () => {
+  scheduleSingerImageResolution(SINGER_IMAGE_SCROLL_DEBOUNCE_MS);
+}, { passive: true });
+
 queueListEl.addEventListener("click", (event) => {
   const actionButton = event.target.closest("[data-queue-action]");
   if (!actionButton || !queueListEl.contains(actionButton)) return;
@@ -758,6 +784,8 @@ function searchNow() {
   if (!state.ready) return;
 
   window.clearTimeout(state.artistResolverTimer);
+  window.clearTimeout(state.singerImageLookupTimer);
+  state.singerImageLookupTimer = 0;
   state.requestId += 1;
   const requestId = state.requestId;
   const shouldResolveArtist = shouldResolveArtistQuery(state.query, state.mode, state.singerFilter);
@@ -803,18 +831,31 @@ function queueArtistResolution(query, mode, requestId) {
 }
 
 async function resolveArtistForSearch(query, mode, requestId) {
-  if (!isCurrentArtistResolution(query, mode, requestId)) return;
+  if (!isCurrentArtistResolution(query, mode, requestId)) {
+    state.artistResolverBusy = false;
+    return;
+  }
 
+  state.artistResolverBusy = true;
   try {
-    const aliases = await resolveArtistAliases(query);
-    setCachedArtistAliases(query, aliases);
+    const result = await resolveArtistAliases(query);
+    const aliases = normalizeArtistAliasList(result.aliases);
+    setCachedArtistAliases(query, aliases, result.status);
 
     if (!aliases.length || !isCurrentArtistResolution(query, mode, requestId)) return;
 
     postSearchRequest(requestId, query, "", mode, aliases);
   } catch (error) {
+    setCachedArtistAliases(query, [], isWikiRateLimitError(error) ? "rate_limited" : "error");
     console.warn("Artist resolver failed", error);
+  } finally {
+    state.artistResolverBusy = false;
+    scheduleSingerImageResolution();
   }
+}
+
+function hasPendingArtistResolution() {
+  return Boolean(state.artistResolverTimer || state.artistResolverBusy || wikiRequestQueues.high.length);
 }
 
 function isCurrentArtistResolution(query, mode, requestId) {
@@ -833,7 +874,8 @@ function getCachedArtistAliases(query) {
   if (!cached) return undefined;
 
   const savedAt = Number(cached.savedAt || 0);
-  if (!savedAt || Date.now() - savedAt > ARTIST_RESOLVER_CACHE_TTL_MS) {
+  const ttl = artistResolverCacheTtl(cached);
+  if (!savedAt || Date.now() - savedAt > ttl) {
     delete state.artistResolverCache[key];
     saveArtistResolverCache();
     return undefined;
@@ -842,12 +884,27 @@ function getCachedArtistAliases(query) {
   return normalizeArtistAliasList(cached.aliases);
 }
 
-function setCachedArtistAliases(query, aliases) {
+function artistResolverCacheTtl(entry) {
+  switch (entry?.status) {
+    case "missing":
+      return ARTIST_RESOLVER_MISS_CACHE_TTL_MS;
+    case "rate_limited":
+      return ARTIST_RESOLVER_RATE_LIMIT_CACHE_TTL_MS;
+    case "error":
+      return ARTIST_RESOLVER_ERROR_CACHE_TTL_MS;
+    default:
+      return ARTIST_RESOLVER_CACHE_TTL_MS;
+  }
+}
+
+function setCachedArtistAliases(query, aliases, status) {
   const key = artistResolverCacheKey(query);
   if (!key) return;
 
+  const normalizedAliases = normalizeArtistAliasList(aliases);
   state.artistResolverCache[key] = {
-    aliases: normalizeArtistAliasList(aliases),
+    aliases: normalizedAliases,
+    status: status || (normalizedAliases.length ? "hit" : "missing"),
     savedAt: Date.now()
   };
   pruneArtistResolverCache();
@@ -895,17 +952,43 @@ function artistResolverCacheKey(query) {
 }
 
 async function resolveArtistAliases(query) {
+  const errors = [];
   const wikidataAliases = await resolveArtistAliasesFromWikidataSearch(query).catch((error) => {
+    errors.push(error);
     console.warn("Wikidata artist lookup failed", error);
     return [];
   });
 
-  if (wikidataAliases.length) return wikidataAliases;
+  if (wikidataAliases.length) {
+    return {
+      aliases: wikidataAliases,
+      status: "hit"
+    };
+  }
 
-  return resolveArtistAliasesFromWikipedia(query).catch((error) => {
+  const wikipediaAliases = await resolveArtistAliasesFromWikipedia(query).catch((error) => {
+    errors.push(error);
     console.warn("Wikipedia artist lookup failed", error);
     return [];
   });
+
+  if (wikipediaAliases.length) {
+    return {
+      aliases: wikipediaAliases,
+      status: "hit"
+    };
+  }
+
+  return {
+    aliases: [],
+    status: artistResolverFailureStatus(errors)
+  };
+}
+
+function artistResolverFailureStatus(errors) {
+  if (!errors.length) return "missing";
+  if (errors.some(isWikiRateLimitError)) return "rate_limited";
+  return "error";
 }
 
 async function resolveArtistAliasesFromWikidataSearch(query) {
@@ -1061,9 +1144,89 @@ function mediaWikiUrl(endpoint, params) {
   return url;
 }
 
-async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS) {
+async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS, options = {}) {
+  return queueWikiRequest((signal) => fetchJsonNow(url, timeoutMs, signal), options.priority || "high");
+}
+
+function queueWikiRequest(task, priority = "high") {
+  return new Promise((resolve, reject) => {
+    const queueName = priority === "low" ? "low" : "high";
+    const item = {
+      task,
+      priority: queueName,
+      resolve,
+      reject,
+      controller: null,
+      preempted: false
+    };
+    wikiRequestQueues[queueName].push(item);
+    if (queueName === "high" && activeWikiRequest?.priority === "low") {
+      activeWikiRequest.preempted = true;
+      activeWikiRequest.controller?.abort();
+    }
+    scheduleWikiQueue();
+  });
+}
+
+function scheduleWikiQueue() {
+  if (wikiRequestActive) return;
+
+  window.clearTimeout(wikiRequestTimer);
+
+  const hasQueuedRequest = wikiRequestQueues.high.length || wikiRequestQueues.low.length;
+  if (!hasQueuedRequest) return;
+
+  const waitUntil = Math.max(wikiNextRequestAt, wikiBackoffUntil);
+  const waitMs = waitUntil - Date.now();
+  if (waitMs > 0) {
+    wikiRequestTimer = window.setTimeout(runNextWikiRequest, waitMs);
+    return;
+  }
+
+  runNextWikiRequest();
+}
+
+function runNextWikiRequest() {
+  if (wikiRequestActive) return;
+
+  window.clearTimeout(wikiRequestTimer);
+  const item = wikiRequestQueues.high.shift() || wikiRequestQueues.low.shift();
+  if (!item) return;
+
+  wikiRequestActive = true;
+  item.controller = new AbortController();
+  activeWikiRequest = item;
+  let wasPreempted = false;
+
+  item.task(item.controller.signal)
+    .then(item.resolve, (error) => {
+      if (item.preempted && isAbortError(error)) {
+        wasPreempted = true;
+        item.preempted = false;
+        wikiRequestQueues.low.unshift(item);
+        return;
+      }
+      item.reject(error);
+    })
+    .finally(() => {
+      item.controller = null;
+      wikiRequestActive = false;
+      activeWikiRequest = null;
+      if (!wasPreempted) {
+        wikiNextRequestAt = Date.now() + WIKI_REQUEST_MIN_INTERVAL_MS;
+      }
+      scheduleWikiQueue();
+    });
+}
+
+async function fetchJsonNow(url, timeoutMs, externalSignal) {
   const controller = new AbortController();
+  const handleExternalAbort = () => controller.abort();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", handleExternalAbort, { once: true });
+  }
 
   try {
     const response = await fetch(url.toString(), {
@@ -1075,13 +1238,47 @@ async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS) {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      if (response.status === 429) {
+        const retryMs = retryAfterMs(response);
+        wikiBackoffUntil = Math.max(wikiBackoffUntil, Date.now() + retryMs);
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.retryAfterMs = retryMs;
+        throw error;
+      }
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
 
     return response.json();
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", handleExternalAbort);
   }
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError";
+}
+
+function retryAfterMs(response) {
+  const retryAfter = response.headers.get("Retry-After");
+  const retryAfterSeconds = Number.parseInt(retryAfter || "", 10);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return retryAfterSeconds * 1000;
+  }
+
+  const retryAfterDate = Date.parse(retryAfter || "");
+  if (Number.isFinite(retryAfterDate)) {
+    return Math.max(0, retryAfterDate - Date.now());
+  }
+
+  return WIKI_RATE_LIMIT_BACKOFF_MS;
+}
+
+function isWikiRateLimited() {
+  return wikiBackoffUntil > Date.now();
 }
 
 function loadSingerImageCache() {
@@ -1123,7 +1320,7 @@ function getSingerImageCacheEntry(name) {
   if (!cached) return undefined;
 
   const savedAt = Number(cached.savedAt || 0);
-  const ttl = cached.status === "missing" ? SINGER_IMAGE_MISS_CACHE_TTL_MS : SINGER_IMAGE_CACHE_TTL_MS;
+  const ttl = singerImageCacheTtl(cached);
   if (!savedAt || Date.now() - savedAt > ttl) {
     delete state.singerImageCache[key];
     saveSingerImageCache();
@@ -1131,6 +1328,19 @@ function getSingerImageCacheEntry(name) {
   }
 
   return cached;
+}
+
+function singerImageCacheTtl(entry) {
+  switch (entry?.status) {
+    case "missing":
+      return SINGER_IMAGE_MISS_CACHE_TTL_MS;
+    case "rate_limited":
+      return SINGER_IMAGE_RATE_LIMIT_CACHE_TTL_MS;
+    case "error":
+      return SINGER_IMAGE_ERROR_CACHE_TTL_MS;
+    default:
+      return SINGER_IMAGE_CACHE_TTL_MS;
+  }
 }
 
 function getCachedSingerImage(name) {
@@ -1151,7 +1361,7 @@ function setCachedSingerImage(name, result) {
         savedAt: Date.now()
       }
     : {
-        status: "missing",
+        status: result?.status || "missing",
         source: "wikimedia",
         savedAt: Date.now()
       };
@@ -1188,10 +1398,26 @@ function splitSingerNames(value) {
     .filter(Boolean);
 }
 
+function scheduleSingerImageResolution(delayMs = SINGER_IMAGE_LOOKUP_DEBOUNCE_MS) {
+  if (state.activeView !== "search" || !state.lastResultMessage) return;
+  if (hasPendingArtistResolution()) return;
+
+  window.clearTimeout(state.singerImageLookupTimer);
+  state.singerImageLookupTimer = window.setTimeout(() => {
+    state.singerImageLookupTimer = 0;
+    queueVisibleSingerImageResolution();
+  }, delayMs);
+}
+
 function queueVisibleSingerImageResolution() {
+  if (hasPendingArtistResolution()) return;
+  if (isWikiRateLimited()) return;
+
   const names = [];
   const seen = new Set();
   const addName = (name) => {
+    if (names.length >= SINGER_IMAGE_MAX_LOOKUPS_PER_BATCH) return;
+
     const key = singerImageCacheKey(name);
     if (!key || seen.has(key) || state.singerImageInflight.has(key)) return;
     if (getSingerImageCacheEntry(name)) return;
@@ -1200,18 +1426,35 @@ function queueVisibleSingerImageResolution() {
     names.push(name);
   };
 
-  state.lastSingers.forEach((singer) => {
-    if (!singer.image && !getDisplaySingerImage(singer.name)) addName(singer.name);
-  });
+  getVisibleResultRows().some((row) => {
+    if (row.classList.contains("singer-result")) {
+      const singer = state.lastSingers.find((item) => item.name === row.dataset.singer);
+      if (singer && !singer.image && !getDisplaySingerImage(singer.name)) addName(singer.name);
+    } else {
+      const song = state.visibleSongs.get(row.dataset.songId);
+      if (song && !song.image && !getDisplaySingerImage(song.singer)) {
+        splitSingerNames(song.singer).some((name) => {
+          addName(name);
+          return names.length >= SINGER_IMAGE_MAX_LOOKUPS_PER_BATCH;
+        });
+      }
+    }
 
-  state.lastResults.forEach((song) => {
-    if (song.image || getDisplaySingerImage(song.singer)) return;
-    splitSingerNames(song.singer).forEach(addName);
+    return names.length >= SINGER_IMAGE_MAX_LOOKUPS_PER_BATCH;
   });
 
   if (!names.length) return;
-  resolveSingerImages(names.slice(0, SINGER_IMAGE_MAX_LOOKUPS_PER_RENDER)).catch((error) => {
+  resolveSingerImages(names).catch((error) => {
     console.warn("Singer image lookup batch failed", error);
+  });
+}
+
+function getVisibleResultRows() {
+  const viewportTop = -SINGER_IMAGE_VISIBLE_OVERSCAN_PX;
+  const viewportBottom = window.innerHeight + SINGER_IMAGE_VISIBLE_OVERSCAN_PX;
+  return [...resultsEl.querySelectorAll(".result-item")].filter((row) => {
+    const rect = row.getBoundingClientRect();
+    return rect.bottom >= viewportTop && rect.top <= viewportBottom;
   });
 }
 
@@ -1240,10 +1483,17 @@ async function resolveSingerImageForName(name) {
     setCachedSingerImage(name, result);
     if (result?.url) scheduleSingerImageRenderRefresh();
   } catch (error) {
+    setCachedSingerImage(name, {
+      status: isWikiRateLimitError(error) ? "rate_limited" : "error"
+    });
     console.warn(`Singer image lookup failed for ${name}`, error);
   } finally {
     state.singerImageInflight.delete(key);
   }
+}
+
+function isWikiRateLimitError(error) {
+  return Number(error?.status) === 429;
 }
 
 function scheduleSingerImageRenderRefresh() {
@@ -1252,7 +1502,7 @@ function scheduleSingerImageRenderRefresh() {
   state.singerImageRenderTimer = window.setTimeout(() => {
     state.singerImageRenderTimer = 0;
     if (state.activeView === "search" && state.lastResultMessage) {
-      renderVisibleSongs();
+      renderVisibleSongs(undefined, { resolveImages: false });
     }
   }, 90);
 }
@@ -1264,7 +1514,7 @@ async function resolveSingerImage(name) {
   const candidates = await searchWikidataSingerCandidates(query);
   const likelyCandidates = candidates.filter((candidate) => isLikelyMusicArtist(candidate, {
     descriptions: {}
-  }));
+  })).slice(0, SINGER_IMAGE_MAX_CANDIDATES);
 
   for (const candidate of likelyCandidates) {
     const file = await fetchWikidataSingerImageFile(candidate.id);
@@ -1299,10 +1549,10 @@ async function searchWikidataSingerCandidates(query) {
     language,
     uselang: "zh-hans",
     type: "item",
-    limit: "5",
+    limit: String(Math.max(1, SINGER_IMAGE_MAX_CANDIDATES + 1)),
     format: "json",
     origin: "*"
-  }), SINGER_IMAGE_TIMEOUT_MS);
+  }), SINGER_IMAGE_TIMEOUT_MS, { priority: "low" });
 
   return (Array.isArray(data.search) ? data.search : [])
     .filter((item) => isWikidataId(item.id))
@@ -1323,7 +1573,7 @@ async function fetchWikidataSingerImageFile(entityId) {
     property: "P18",
     format: "json",
     origin: "*"
-  }), SINGER_IMAGE_TIMEOUT_MS);
+  }), SINGER_IMAGE_TIMEOUT_MS, { priority: "low" });
 
   const claims = Array.isArray(data.claims?.P18) ? [...data.claims.P18] : [];
   claims.sort((a, b) => claimRankScore(a) - claimRankScore(b));
@@ -1351,7 +1601,7 @@ async function fetchCommonsThumbnailUrl(fileName) {
     iiprop: "url",
     iiurlwidth: "96",
     origin: "*"
-  }), SINGER_IMAGE_TIMEOUT_MS);
+  }), SINGER_IMAGE_TIMEOUT_MS, { priority: "low" });
 
   const pages = Object.values(data.query?.pages || {});
   for (const page of pages) {
@@ -1408,12 +1658,13 @@ function renderResults(message) {
   renderVisibleSongs(highlightQueries);
 }
 
-function renderVisibleSongs(query = state.query) {
+function renderVisibleSongs(query = state.query, options = {}) {
+  const { resolveImages = true } = options;
   resultsEl.replaceChildren(
     ...state.lastSingers.map((singer) => renderSinger(singer, query)),
     ...state.lastResults.map((song) => renderSong(song, query))
   );
-  queueVisibleSingerImageResolution();
+  if (resolveImages) scheduleSingerImageResolution();
 }
 
 function renderSinger(singer, query) {
