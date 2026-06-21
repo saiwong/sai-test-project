@@ -1,4 +1,4 @@
-/* global KTV_SONGS, KTV_SONGS_META */
+/* global KTV_SINGER_IMAGES, KTV_SONGS, KTV_SONGS_META */
 
 const CJK_RE = /[\u3400-\u9fff]/;
 const TAG_RE = /\b(hd|mtv|live|diy|dj|dvd|mp3)\b/gi;
@@ -6,11 +6,18 @@ const TAG_RE = /\b(hd|mtv|live|diy|dj|dvd|mp3)\b/gi;
 let records = [];
 let singerGroups = [];
 let T2S_MAP = {};
+let singerImages = new Map();
 
 try {
   importScripts(`data/t2s-map.js?v=${Date.now()}`);
+  try {
+    importScripts(`data/singers.js?v=${Date.now()}`);
+  } catch (error) {
+    self.KTV_SINGER_IMAGES = {};
+  }
   importScripts(`data/songs.js?v=${Date.now()}`);
   T2S_MAP = self.KTV_T2S_MAP || {};
+  singerImages = makeSingerImageMap(self.KTV_SINGER_IMAGES || {});
   records = (self.KTV_SONGS || KTV_SONGS).map(makeRecord);
   singerGroups = buildSingerGroups(records);
   self.postMessage({
@@ -66,6 +73,7 @@ function makeRecord(row, index) {
   const singerCompact = compact(singerNorm);
   const haystack = `${titleNorm} ${singerNorm}`.trim();
   const haystackCompact = compact(haystack);
+  const image = findSingerImage(singerNames);
 
   return {
     index,
@@ -79,6 +87,7 @@ function makeRecord(row, index) {
     singerCompact,
     haystack,
     haystackCompact,
+    image,
     tags: extractTags(title)
   };
 }
@@ -99,6 +108,7 @@ function buildSingerGroups(items) {
           name,
           norm,
           compact: key,
+          image: findSingerImage([name]) || record.image,
           count: 0,
           firstIndex: record.index,
           records: []
@@ -109,6 +119,7 @@ function buildSingerGroups(items) {
       group.count += 1;
       group.records.push(record);
       group.firstIndex = Math.min(group.firstIndex, record.index);
+      if (!group.image && record.image) group.image = record.image;
     }
   }
 
@@ -470,12 +481,34 @@ function extractTags(title) {
   return [...found];
 }
 
+function makeSingerImageMap(images) {
+  const map = new Map();
+
+  Object.entries(images || {}).forEach(([name, image]) => {
+    const key = compact(normalize(name));
+    const value = String(image || "").trim();
+    if (key && value) map.set(key, value);
+  });
+
+  return map;
+}
+
+function findSingerImage(names) {
+  for (const name of names) {
+    const image = singerImages.get(compact(normalize(name)));
+    if (image) return image;
+  }
+
+  return "";
+}
+
 function publicSong(record, score = 0) {
   return {
     type: "song",
     id: record.id,
     title: record.title,
     singer: record.singer,
+    image: record.image,
     tags: record.tags,
     score: Math.round(score)
   };
@@ -485,6 +518,7 @@ function publicSinger(group, score = 0) {
   return {
     type: "singer",
     name: group.name,
+    image: group.image,
     count: group.count,
     score: Math.round(score)
   };

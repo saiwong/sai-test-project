@@ -1,0 +1,12 @@
+{
+  "name": "ktvapp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scrape:songs": "node scripts/scrape-songs.mjs",
+    "scrape:singers": "node scripts/scrape-singers.mjs",
+    "build:data": "node scripts/build-data.mjs",
+    "update:songs": "node scripts/update-songs.mjs"
+  }
+}

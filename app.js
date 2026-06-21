@@ -22,16 +22,24 @@ const randomizeQueueButton = document.querySelector("#randomize-queue");
 
 const DEFAULT_SONG_SERVER_HOST = "";
 const SONG_SERVER_HOST = getSongServerHost();
-const COMMAND_ENDPOINT = `${SONG_SERVER_HOST}/demo/CommandServlet`;
-const PLAYLIST_ENDPOINT = `${SONG_SERVER_HOST}/demo/PlaylistServlet`;
-const SELECTED_SONGS_CACHE_KEY = `ktv-selected-songs:${SONG_SERVER_HOST}`;
+const COMMAND_ENDPOINT = SONG_SERVER_HOST ? `${SONG_SERVER_HOST}/demo/CommandServlet` : "";
+const PLAYLIST_ENDPOINT = SONG_SERVER_HOST ? `${SONG_SERVER_HOST}/demo/PlaylistServlet` : "";
+const SELECTED_SONGS_CACHE_KEY = SONG_SERVER_HOST ? `ktv-selected-songs:${SONG_SERVER_HOST}` : "ktv-selected-songs";
 const LANGUAGE_CACHE_KEY = "ktv-interface-language";
 const ARTIST_RESOLVER_CACHE_KEY = "ktv-artist-resolver-cache:v1";
+const SINGER_IMAGE_CACHE_KEY = "ktv-singer-image-cache:v1";
 const ARTIST_RESOLVER_DEBOUNCE_MS = 340;
 const ARTIST_RESOLVER_TIMEOUT_MS = 4500;
 const ARTIST_RESOLVER_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ARTIST_RESOLVER_MAX_CACHE_ENTRIES = 180;
 const ARTIST_RESOLVER_MAX_ALIASES = 8;
+const SINGER_IMAGE_TIMEOUT_MS = 5200;
+const SINGER_IMAGE_CACHE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const SINGER_IMAGE_MISS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SINGER_IMAGE_MAX_CACHE_ENTRIES = 500;
+const SINGER_IMAGE_MAX_LOOKUPS_PER_RENDER = 24;
+const SINGER_IMAGE_LOOKUP_CONCURRENCY = 3;
+const WIKIMEDIA_API_USER_AGENT = "KTVFinder/1.0 (https://github.com/saiwong/sai-test-project)";
 const ADD_COMMAND = "Add1";
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const LATIN_TEXT_RE = /[a-z]/i;
@@ -219,6 +227,7 @@ const TEXT = {
     "status.indexFailed": "Index failed to load",
     "status.workerFailed": "Search worker failed",
     "status.unableIndex": "Unable to load index",
+    "status.serverRequired": "Add songServerHost to control the KTV server",
     "status.sent": "{action} sent",
     "status.failed": "{action} failed",
     "status.movedNext": "Moved next",
@@ -295,6 +304,7 @@ const TEXT = {
     "status.indexFailed": "歌库加载失败",
     "status.workerFailed": "搜索加载失败",
     "status.unableIndex": "无法加载歌库",
+    "status.serverRequired": "请先加入 songServerHost 才能控制点歌机",
     "status.sent": "{action}已发送",
     "status.failed": "{action}失败",
     "status.movedNext": "已置顶",
@@ -343,7 +353,10 @@ const state = {
   queueBusy: false,
   selectedRetryTimer: 0,
   selectedRetryCount: 0,
-  artistResolverCache: loadArtistResolverCache()
+  artistResolverCache: loadArtistResolverCache(),
+  singerImageCache: loadSingerImageCache(),
+  singerImageInflight: new Set(),
+  singerImageRenderTimer: 0
 };
 
 updatePlaylistCount(state.selectedSongs.length);
@@ -366,6 +379,10 @@ function getSongServerHost() {
     console.warn(`Ignoring invalid songServerHost: ${rawHost}`, error);
     return DEFAULT_SONG_SERVER_HOST;
   }
+}
+
+function hasSongServerHost() {
+  return Boolean(SONG_SERVER_HOST);
 }
 
 function getInitialLanguage() {
@@ -1052,7 +1069,8 @@ async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS) {
     const response = await fetch(url.toString(), {
       signal: controller.signal,
       headers: {
-        Accept: "application/json"
+        Accept: "application/json",
+        "Api-User-Agent": WIKIMEDIA_API_USER_AGENT
       }
     });
 
@@ -1064,6 +1082,295 @@ async function fetchJson(url, timeoutMs = ARTIST_RESOLVER_TIMEOUT_MS) {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+function loadSingerImageCache() {
+  try {
+    const raw = window.localStorage.getItem(SINGER_IMAGE_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.warn("Unable to read singer image cache", error);
+    return {};
+  }
+}
+
+function saveSingerImageCache() {
+  try {
+    window.localStorage.setItem(SINGER_IMAGE_CACHE_KEY, JSON.stringify(state.singerImageCache));
+  } catch (error) {
+    console.warn("Unable to save singer image cache", error);
+  }
+}
+
+function pruneSingerImageCache() {
+  const entries = Object.entries(state.singerImageCache);
+  if (entries.length <= SINGER_IMAGE_MAX_CACHE_ENTRIES) return;
+
+  entries
+    .sort((a, b) => Number(a[1]?.savedAt || 0) - Number(b[1]?.savedAt || 0))
+    .slice(0, entries.length - SINGER_IMAGE_MAX_CACHE_ENTRIES)
+    .forEach(([key]) => {
+      delete state.singerImageCache[key];
+    });
+}
+
+function getSingerImageCacheEntry(name) {
+  const key = singerImageCacheKey(name);
+  if (!key) return undefined;
+
+  const cached = state.singerImageCache[key];
+  if (!cached) return undefined;
+
+  const savedAt = Number(cached.savedAt || 0);
+  const ttl = cached.status === "missing" ? SINGER_IMAGE_MISS_CACHE_TTL_MS : SINGER_IMAGE_CACHE_TTL_MS;
+  if (!savedAt || Date.now() - savedAt > ttl) {
+    delete state.singerImageCache[key];
+    saveSingerImageCache();
+    return undefined;
+  }
+
+  return cached;
+}
+
+function getCachedSingerImage(name) {
+  const cached = getSingerImageCacheEntry(name);
+  return cached?.url || "";
+}
+
+function setCachedSingerImage(name, result) {
+  const key = singerImageCacheKey(name);
+  if (!key) return;
+
+  state.singerImageCache[key] = result?.url
+    ? {
+        url: result.url,
+        entityId: result.entityId || "",
+        file: result.file || "",
+        source: "wikimedia",
+        savedAt: Date.now()
+      }
+    : {
+        status: "missing",
+        source: "wikimedia",
+        savedAt: Date.now()
+      };
+
+  pruneSingerImageCache();
+  saveSingerImageCache();
+}
+
+function singerImageCacheKey(name) {
+  return String(name || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w\u3400-\u9fff]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getDisplaySingerImage(singerText, staticImage = "") {
+  if (staticImage) return staticImage;
+
+  for (const name of splitSingerNames(singerText)) {
+    const image = getCachedSingerImage(name);
+    if (image) return image;
+  }
+
+  return "";
+}
+
+function splitSingerNames(value) {
+  return String(value || "")
+    .split(/[,，、/&+;；]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function queueVisibleSingerImageResolution() {
+  const names = [];
+  const seen = new Set();
+  const addName = (name) => {
+    const key = singerImageCacheKey(name);
+    if (!key || seen.has(key) || state.singerImageInflight.has(key)) return;
+    if (getSingerImageCacheEntry(name)) return;
+
+    seen.add(key);
+    names.push(name);
+  };
+
+  state.lastSingers.forEach((singer) => {
+    if (!singer.image && !getDisplaySingerImage(singer.name)) addName(singer.name);
+  });
+
+  state.lastResults.forEach((song) => {
+    if (song.image || getDisplaySingerImage(song.singer)) return;
+    splitSingerNames(song.singer).forEach(addName);
+  });
+
+  if (!names.length) return;
+  resolveSingerImages(names.slice(0, SINGER_IMAGE_MAX_LOOKUPS_PER_RENDER)).catch((error) => {
+    console.warn("Singer image lookup batch failed", error);
+  });
+}
+
+async function resolveSingerImages(names) {
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < names.length) {
+      const name = names[nextIndex];
+      nextIndex += 1;
+      await resolveSingerImageForName(name);
+    }
+  }
+
+  const workerCount = Math.min(SINGER_IMAGE_LOOKUP_CONCURRENCY, names.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+async function resolveSingerImageForName(name) {
+  const key = singerImageCacheKey(name);
+  if (!key || state.singerImageInflight.has(key) || getSingerImageCacheEntry(name)) return;
+
+  state.singerImageInflight.add(key);
+  try {
+    const result = await resolveSingerImage(name);
+    setCachedSingerImage(name, result);
+    if (result?.url) scheduleSingerImageRenderRefresh();
+  } catch (error) {
+    console.warn(`Singer image lookup failed for ${name}`, error);
+  } finally {
+    state.singerImageInflight.delete(key);
+  }
+}
+
+function scheduleSingerImageRenderRefresh() {
+  if (state.singerImageRenderTimer) return;
+
+  state.singerImageRenderTimer = window.setTimeout(() => {
+    state.singerImageRenderTimer = 0;
+    if (state.activeView === "search" && state.lastResultMessage) {
+      renderVisibleSongs();
+    }
+  }, 90);
+}
+
+async function resolveSingerImage(name) {
+  const query = normalizeSingerImageQuery(name);
+  if (!query) return null;
+
+  const candidates = await searchWikidataSingerCandidates(query);
+  const likelyCandidates = candidates.filter((candidate) => isLikelyMusicArtist(candidate, {
+    descriptions: {}
+  }));
+
+  for (const candidate of likelyCandidates) {
+    const file = await fetchWikidataSingerImageFile(candidate.id);
+    if (!file) continue;
+
+    const url = await fetchCommonsThumbnailUrl(file);
+    if (url) {
+      return {
+        url,
+        entityId: candidate.id,
+        file
+      };
+    }
+  }
+
+  return null;
+}
+
+function normalizeSingerImageQuery(name) {
+  return String(name || "")
+    .replace(/\s*\([^)]*\)\s*$/g, "")
+    .replace(/\s*（[^）]*）\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function searchWikidataSingerCandidates(query) {
+  const language = CJK_TEXT_RE.test(query) ? "zh-hans" : "en";
+  const data = await fetchJson(mediaWikiUrl("https://www.wikidata.org/w/api.php", {
+    action: "wbsearchentities",
+    search: query,
+    language,
+    uselang: "zh-hans",
+    type: "item",
+    limit: "5",
+    format: "json",
+    origin: "*"
+  }), SINGER_IMAGE_TIMEOUT_MS);
+
+  return (Array.isArray(data.search) ? data.search : [])
+    .filter((item) => isWikidataId(item.id))
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      label: item.label,
+      description: item.description,
+      aliases: Array.isArray(item.aliases) ? item.aliases : [],
+      match: item.match?.text || ""
+    }));
+}
+
+async function fetchWikidataSingerImageFile(entityId) {
+  const data = await fetchJson(mediaWikiUrl("https://www.wikidata.org/w/api.php", {
+    action: "wbgetclaims",
+    entity: entityId,
+    property: "P18",
+    format: "json",
+    origin: "*"
+  }), SINGER_IMAGE_TIMEOUT_MS);
+
+  const claims = Array.isArray(data.claims?.P18) ? [...data.claims.P18] : [];
+  claims.sort((a, b) => claimRankScore(a) - claimRankScore(b));
+
+  for (const claim of claims) {
+    const value = claim.mainsnak?.datavalue?.value;
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+
+  return "";
+}
+
+function claimRankScore(claim) {
+  if (claim?.rank === "preferred") return 0;
+  if (claim?.rank === "normal") return 1;
+  return 2;
+}
+
+async function fetchCommonsThumbnailUrl(fileName) {
+  const data = await fetchJson(mediaWikiUrl("https://commons.wikimedia.org/w/api.php", {
+    action: "query",
+    format: "json",
+    prop: "imageinfo",
+    titles: `File:${fileName}`,
+    iiprop: "url",
+    iiurlwidth: "96",
+    origin: "*"
+  }), SINGER_IMAGE_TIMEOUT_MS);
+
+  const pages = Object.values(data.query?.pages || {});
+  for (const page of pages) {
+    const info = page.imageinfo?.[0];
+    const url = normalizeSingerImageUrl(info?.thumburl || info?.url);
+    if (url) return url;
+  }
+
+  return "";
+}
+
+function normalizeSingerImageUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+
+  if (url.startsWith("//")) return `https:${url}`;
+  if (url.startsWith("http://upload.wikimedia.org/")) return url.replace("http://", "https://");
+  if (url.startsWith("https://upload.wikimedia.org/")) return url;
+  return "";
 }
 
 function renderResults(message) {
@@ -1106,6 +1413,7 @@ function renderVisibleSongs(query = state.query) {
     ...state.lastSingers.map((singer) => renderSinger(singer, query)),
     ...state.lastResults.map((song) => renderSong(song, query))
   );
+  queueVisibleSingerImageResolution();
 }
 
 function renderSinger(singer, query) {
@@ -1136,7 +1444,13 @@ function renderSinger(singer, query) {
   action.className = "singer-action";
   setButtonContent(action, "list", t("singer.view"));
 
+  const thumbnail = createSingerThumbnail(getDisplaySingerImage(singer.name, singer.image));
+  if (thumbnail) {
+    li.classList.add("has-thumbnail");
+    side.classList.add("has-thumbnail");
+  }
   side.append(action);
+  if (thumbnail) side.append(thumbnail);
   li.append(main, side);
   return li;
 }
@@ -1144,7 +1458,7 @@ function renderSinger(singer, query) {
 function renderSong(song, query) {
   const queueStatus = state.queueState.get(song.id);
   const li = document.createElement("li");
-  li.className = "result-item";
+  li.className = "result-item song-result";
   li.dataset.songId = song.id;
   li.tabIndex = 0;
   li.setAttribute("role", "button");
@@ -1193,11 +1507,40 @@ function renderSong(song, query) {
   const queueNote = document.createElement("span");
   queueNote.className = "queue-status";
   queueNote.textContent = queueStatusMessage(queueStatus);
+  const hasQueueNote = Boolean(queueNote.textContent);
+  if (hasQueueNote) side.classList.add("has-status");
 
+  const thumbnail = createSingerThumbnail(getDisplaySingerImage(song.singer, song.image));
   actionRow.append(queueButton);
-  side.append(actionRow, tags, queueNote);
+  if (thumbnail) {
+    li.classList.add("has-thumbnail");
+    side.classList.add("has-thumbnail");
+    side.append(actionRow, tags);
+    if (hasQueueNote) side.append(queueNote);
+    side.append(thumbnail);
+  } else {
+    side.append(actionRow, tags);
+    if (hasQueueNote) side.append(queueNote);
+  }
   li.append(main, side);
   return li;
+}
+
+function createSingerThumbnail(image) {
+  if (!image) return null;
+
+  const thumb = document.createElement("span");
+  thumb.className = "singer-thumb";
+  thumb.setAttribute("aria-hidden", "true");
+
+  const img = document.createElement("img");
+  img.src = image;
+  img.alt = "";
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  thumb.append(img);
+  return thumb;
 }
 
 function setActiveView(view) {
@@ -1221,6 +1564,10 @@ function setActiveView(view) {
 
 async function sendRemoteCommand(cmd, cmdValue, button) {
   if (!cmd || button?.disabled) return;
+  if (!hasSongServerHost()) {
+    setStatus("status.serverRequired");
+    return;
+  }
 
   const label = commandLabel(cmd);
   button?.classList.add("is-busy");
@@ -1240,6 +1587,14 @@ async function sendRemoteCommand(cmd, cmdValue, button) {
 }
 
 async function loadSelectedSongs(fullList) {
+  if (!hasSongServerHost()) {
+    clearSelectedSongsRetry();
+    state.selectedRetryCount = 0;
+    updatePlaylistCount(state.selectedSongs.length);
+    renderSelectedSongs();
+    return;
+  }
+
   if (state.queueBusy && !fullList) return;
 
   try {
@@ -1429,6 +1784,10 @@ async function removeSelectedSong(rowId) {
 
 async function runQueueMutation(cmd, rowId, successKey) {
   if (state.queueBusy) return;
+  if (!hasSongServerHost()) {
+    setStatus("status.serverRequired");
+    return;
+  }
 
   state.queueBusy = true;
   renderSelectedSongs();
@@ -1447,6 +1806,10 @@ async function runQueueMutation(cmd, rowId, successKey) {
 
 async function randomizeSelectedSongs() {
   if (state.queueBusy) return;
+  if (!hasSongServerHost()) {
+    setStatus("status.serverRequired");
+    return;
+  }
 
   const candidates = state.selectedSongs.filter((song) => song.rowId);
   if (candidates.length < 2) {
@@ -1491,6 +1854,10 @@ function shuffle(items) {
 async function queueSong(songId) {
   const song = state.visibleSongs.get(songId);
   if (!song) return;
+  if (!hasSongServerHost()) {
+    setStatus("status.serverRequired");
+    return;
+  }
 
   const current = state.queueState.get(songId);
   if (current?.status === "pending") return;
@@ -1520,6 +1887,10 @@ async function queueSong(songId) {
 }
 
 async function sendCommand(cmd, cmdValue) {
+  if (!hasSongServerHost()) {
+    throw new Error("songServerHost is required");
+  }
+
   const response = await jsonp(COMMAND_ENDPOINT, {
     cmd,
     cmdValue
